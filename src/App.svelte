@@ -1,5 +1,7 @@
 <script lang="ts">
   import * as G from './lib/game'
+  import { slide } from 'svelte/transition'
+  import { cubicOut } from 'svelte/easing'
   import { SAVE_KEY } from './lib/reset'
   import type { State, Recruit, Pos, Player, Game, PortalEntry, Lean } from './lib/game'
 
@@ -293,6 +295,30 @@
   const traitTag = (t?: G.Trait) => t ? G.TRAITS[t] : null
   // live signing day: pending (hats on the table), spinning (the pause), result (the pick)
   let sdPhase = $state<'pending' | 'spinning' | 'result'>('pending')
+  const reducedMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches
+  /** Ticks a number up from 0 to its value (instant with reduced motion). */
+  function countUp(node: HTMLElement, value: number) {
+    let frame = 0
+    const run = (to: number) => {
+      cancelAnimationFrame(frame)
+      if (reducedMotion() || to <= 0) { node.textContent = String(to); return }
+      const start = performance.now(), ms = 900
+      const tick = (now: number) => {
+        const t = Math.min(1, (now - start) / ms)
+        node.textContent = String(Math.round(to * (1 - Math.pow(1 - t, 3))))
+        if (t < 1) frame = requestAnimationFrame(tick)
+      }
+      node.textContent = '0'
+      frame = requestAnimationFrame(tick)
+    }
+    run(value)
+    return { update: run, destroy: () => cancelAnimationFrame(frame) }
+  }
+  /** Expanding cards slide open; skipped when hidden (desktop uses the side panel) or with reduced motion. */
+  function reveal(node: HTMLElement) {
+    if (reducedMotion() || node.offsetParent === null) return { duration: 0 }
+    return slide(node, { duration: 220, easing: cubicOut })
+  }
   function revealPick() {
     if (!g?.signing) return
     sdPhase = 'spinning'
@@ -389,9 +415,9 @@
       {#if swapTarget}<span class="tag swapin">Swap in</span>{:else if swapFrom === p.id}<span class="tag train">Picked</span>{/if}
     </span>
     <span class="nums"><b>{Math.round(p.ovr)}</b><small>POT {G.grade(p.pot)}</small></span>
-    <span class="chev" aria-hidden="true">{playerSel === p.id ? '▾' : '▸'}</span>
+    <span class="chev" aria-hidden="true">▸</span>
   </button>
-  {#if playerSel === p.id}<div class="rinline">{@render playerCard(p, isStarter)}</div>{/if}
+  {#if playerSel === p.id}<div class="rinline" transition:reveal>{@render playerCard(p, isStarter)}</div>{/if}
 {/snippet}
 
 {#snippet boxScore(gm: Game)}
@@ -765,9 +791,11 @@
         <div class="col">
           {#if playerSel !== null && me.roster.some(x => x.id === playerSel)}
             {@const sp = me.roster.find(x => x.id === playerSel)!}
-            <section class="card pcard">{@render playerCard(sp, starterIds.has(sp.id))}</section>
+            {#key sp.id}<section class="card pcard cardin">{@render playerCard(sp, starterIds.has(sp.id))}</section>{/key}
           {/if}
-          <section class="card matchup">
+          <section class="card matchup" class:gameday={g.phase === 'season' && mySpot}>
+            {#if g.phase === 'season' && mySpot}<div class="ribbon" aria-hidden="true">GAME DAY</div>{/if}
+            {#if g.phase === 'season' && weather && weather !== 'clear' && weather !== 'indoors'}<div class="wxfx {weather}" aria-hidden="true"></div>{/if}
             {#if g.phase === 'offseason'}
               <div class="eyebrow">Season complete</div>
               <h2>{G.finishLabel(g, me)}</h2>
@@ -794,7 +822,7 @@
                   <span>#{next.home === g.user ? next.seeds[0] : next.seeds[1]} seed vs #{next.home === g.user ? next.seeds[1] : next.seeds[0]} seed. Win or go home.</span></div>
               {/if}
               <div class="eyebrow">{weekLabel} · <span class:cupcake={next.type === 'cupcake'}>{gameTag(next)}</span> · {SITE_LABEL[site]}</div>
-              <div class="score">
+              <div class="score teamtint" style="--lc:{me.color}; --rc:{opp.color}">
                 <div class="side">
                   {@render badge(me, 'lg')}
                   <div class="sname"><span class="rk">{rk(me.id)}</span>{me.school}</div>
@@ -969,13 +997,13 @@
                   <span class="rstat {st.k}">{st.text}</span>
                 </span>
                 <span class="nums"><b>{estRange(r)}</b><small>OVR</small></span>
-                <span class="chev" aria-hidden="true">{sel?.id === r.id ? '▾' : '▸'}</span>
+                <span class="chev" aria-hidden="true">▸</span>
               </button>
-              {#if sel?.id === r.id}<div class="rinline">{@render recruitDetail(r)}</div>{/if}
+              {#if sel?.id === r.id}<div class="rinline" transition:reveal>{@render recruitDetail(r)}</div>{/if}
             {/each}
           </div>
         </section>
-        {#if sel}<aside class="card rside">{@render recruitDetail(sel)}</aside>{/if}
+        {#if sel}{#key sel.id}<aside class="card rside cardin">{@render recruitDetail(sel)}</aside>{/key}{/if}
       </div>
 
     {:else if tab === 'portal'}
@@ -1050,7 +1078,7 @@
                   </span>
                   <span class="nums"><b>{Math.round(e.p.ovr)}</b><small>OVR</small></span>
                 </button>
-                {#if pSel?.p.id === e.p.id}<div class="rinline">{@render portalDetail(e)}</div>{/if}
+                {#if pSel?.p.id === e.p.id}<div class="rinline" transition:reveal>{@render portalDetail(e)}</div>{/if}
               {/each}
             </div>
           </section>
@@ -1447,8 +1475,12 @@
           <div class="hats" class:spinning={sdPhase === 'spinning'}>
             {#each x.schools as id}
               {@const t = G.team(g, id)}
-              <div class="hat" class:picked={sdPhase === 'result' && x.winner === id} class:out={sdPhase === 'result' && x.winner !== id}>
+              <div class="hat" class:picked={sdPhase === 'result' && x.winner === id} class:out={sdPhase === 'result' && x.winner !== id} class:me={id === g.user}>
                 <span class="hatcap" aria-hidden="true">🧢</span>{@render badge(t, 'md')}<span class="small">{t.school}</span>
+                {#if sdPhase === 'result' && x.winner === id && id === g.user}
+                  <span class="burst" aria-hidden="true">{#each Array(10) as _, k}<i style="--a:{k * 36}deg">★</i>{/each}</span>
+                  <span class="stamp" aria-hidden="true">SIGNED</span>
+                {/if}
               </div>
             {/each}
           </div>
@@ -1527,10 +1559,10 @@
         {#if rc.result && ro}
           <div class="recap-score" class:win={rc.result.win}>
             {@render badge(me, 'md')}
-            <b>{rc.result.my}</b><span class="dash">–</span><b>{rc.result.their}</b>
+            <b use:countUp={rc.result.my}>{rc.result.my}</b><span class="dash">–</span><b use:countUp={rc.result.their}>{rc.result.their}</b>
             {@render badge(ro, 'md')}
           </div>
-          <h2>{rc.result.win ? 'Win' : 'Loss'} {rc.result.home ? 'vs' : 'at'} {ro.school}</h2>
+          <h2 class="afterscore">{rc.result.win ? 'Win' : 'Loss'} {rc.result.home ? 'vs' : 'at'} {ro.school}</h2>
           {@const rg = g.schedule.find(x => x.week === rc.week && (x.home === g!.user || x.away === g!.user))}
           {#if rg?.log}
             {@render boxScore(rg)}
