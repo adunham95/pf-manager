@@ -4,6 +4,7 @@
   import { cubicOut } from 'svelte/easing'
   import { SAVE_KEY } from './lib/reset'
   import Gamecast from './Gamecast.svelte'
+  import Face from './Face.svelte'
   import type { State, Recruit, Pos, Player, Game, PortalEntry, Lean } from './lib/game'
 
   const KEY = SAVE_KEY
@@ -380,7 +381,8 @@
     return avg(b) - avg(a)
   })
   const starStr = (n: number) => '★'.repeat(n) + '☆'.repeat(5 - n)
-  const initials = (p: { first: string; last: string }) => p.first[0] + p.last[0]
+  /** Jersey color for a recruit's face: yours once he commits, a plain high school grey before. */
+  const recruitColor = (r: Recruit) => r.committed !== null && g ? G.team(g, r.committed).color : '#7c8799'
   const typeTag: Record<string, string> = { cupcake: 'Cupcake', nonconf: 'Non-conference', conf: 'Conference', ccg: 'Conference title', quarter: 'Playoff quarterfinal', semi: 'Playoff semifinal', final: 'National title', bowl: 'Bowl game' }
   const ROT = [
     { v: 0, name: 'Starters', note: 'Your best lineup plays the whole game.' },
@@ -410,7 +412,7 @@
     onclick={() => swapTarget ? doSwap(p.id) : (playerSel = playerSel === p.id ? null : p.id)}
     aria-expanded={swapTarget ? undefined : playerSel === p.id}>
     <span class="pill {slot}">{slot}</span>
-    <span class="avatar" style="--c:{me?.color}">{initials(p)}</span>
+    <Face id={p.id} color={me?.color ?? '#7c8799'} year={p.year} />
     <span class="who">
       <span class="pname">{p.first[0]}. {p.last} {#if p.lock}<span class="tag">Set</span>{/if}</span>
       <span class="psub">{G.YEARS[p.year]} · <span class="dev {p.dev}">{p.dev} dev</span>{#if p.trait}{' · '}<span class="trait" class:bad={!G.TRAITS[p.trait].good}>{p.trait}</span>{/if} · {p.snaps} snaps{#if p.walkOn} · walk-on{/if}</span>
@@ -546,10 +548,10 @@
   {@const m = G.playerMorale(g!, p)}
   <div class="rdetail">
     <div class="rd-head">
-      <span class="pill big {p.pos}">{p.pos}</span>
+      <Face id={p.id} color={me?.color ?? '#7c8799'} year={p.year} size="lg" />
       <div class="grow">
         <h2>{p.first} {p.last}</h2>
-        <div class="stars lg">{starStr(p.stars)}</div>
+        <div class="posline"><span class="pill {p.pos}">{p.pos}</span><span class="stars lg">{starStr(p.stars)}</span></div>
       </div>
       <button class="btn sm" onclick={() => (playerSel = null)} aria-label="Close player card">Close</button>
     </div>
@@ -613,10 +615,10 @@
   {@const starts = G.wouldStart(g!, e)}
   <div class="rdetail">
     <div class="rd-head">
-      <span class="pill big {e.p.pos}">{e.p.pos}</span>
+      <Face id={e.p.id} color={G.team(g!, e.from).color} year={e.p.year} size="lg" />
       <div class="grow">
         <h2>{e.p.first} {e.p.last}</h2>
-        <div class="stars lg">{starStr(e.p.stars)}</div>
+        <div class="posline"><span class="pill {e.p.pos}">{e.p.pos}</span><span class="stars lg">{starStr(e.p.stars)}</span></div>
       </div>
       <span class="rstat {st.k} big">{st.text}</span>
     </div>
@@ -663,10 +665,10 @@
   {@const live = recruitingOpen && r.committed === null}
   <div class="rdetail">
     <div class="rd-head">
-      <span class="pill big {r.pos}">{r.pos}</span>
+      <Face id={r.id} color={recruitColor(r)} size="lg" />
       <div class="grow">
         <h2>{r.first} {r.last}</h2>
-        <div class="stars lg">{starStr(r.stars)}</div>
+        <div class="posline"><span class="pill {r.pos}">{r.pos}</span><span class="stars lg">{starStr(r.stars)}</span></div>
       </div>
       <div class="rd-side">
         <span class="rstat {st.k} big">{st.text}</span>
@@ -1001,6 +1003,7 @@
               {@const st = rStatus(r)}
               <button class="rrow {st.k}" class:sel={sel?.id === r.id} onclick={() => (selId = selId === r.id ? null : r.id)} aria-expanded={sel?.id === r.id}>
                 <span class="pill {r.pos}" class:need={needs.need[r.pos] > 0}>{r.pos}</span>
+                <Face id={r.id} color={recruitColor(r)} size="sm" />
                 <span class="who">
                   <span class="pname">{#if r.followed}<span class="followstar" title="Following">★</span> {/if}{r.first} {r.last}{#if r.scouted && r.gem} <span title="Hidden gem">💎</span>{/if}</span>
                   <span class="stars">{starStr(r.stars)}</span>
@@ -1081,6 +1084,7 @@
                 {@const from = G.team(g, e.from)}
                 <button class="rrow {st.k}" class:sel={pSel?.p.id === e.p.id} onclick={() => (pSelId = e.p.id)} aria-pressed={pSel?.p.id === e.p.id}>
                   <span class="pill {e.p.pos}" class:need={needs.need[e.p.pos] > 0}>{e.p.pos}</span>
+                  <Face id={e.p.id} color={from.color} year={e.p.year} size="sm" />
                   <span class="who">
                     <span class="pname">{e.p.first} {e.p.last}</span>
                     <span class="psub">{e.from === g.user ? 'Yours' : from.abbr} · {G.YEARS[e.p.year]} · <span class="stars">{'★'.repeat(e.p.stars)}</span></span>

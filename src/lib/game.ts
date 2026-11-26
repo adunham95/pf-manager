@@ -657,6 +657,9 @@ export interface Drive {
 type Boost = { off: number; def: number }
 interface Side { team: Team; blend: number; boost: Boost; plan: Plan }
 const DRIVES = 22
+/** Late in a game, a team trailing by this much scores more easily against a prevent defense. */
+const GARBAGE_LEAD = 21
+const GARBAGE_BOOST = 0.15
 /** Home crowd: added to the home offense's drive success, and AWAY_SHARE of it taken from the visitors'. */
 export const HOME_EDGE = 0.035
 const AWAY_SHARE = 0.6
@@ -706,7 +709,9 @@ function playGame(A: Side, B: Side, homeAdv: number, wantLog: boolean, weather: 
   for (let i = 0; i < DRIVES; i++) {
     const side = (i % 2) as 0 | 1, x = sides[side], q = Math.min(4, Math.floor(i / 5.5) + 1)
     let pts = 0, kind: 'td' | 'fg' | 'miss' | 'stop' = 'stop'
-    if (rnd() < x.p) {
+    // Garbage time: a team down three scores late faces a soft prevent defense.
+    const garbage = q >= 4 && score[1 - side] - score[side] >= GARBAGE_LEAD ? GARBAGE_BOOST : 0
+    if (rnd() < x.p + garbage) {
       if (rnd() < x.td) { pts = 7; kind = 'td' } else if (rnd() < 0.55 + x.k / 300 + fx.fg) { pts = 3; kind = 'fg' } else kind = 'miss'
     }
     score[side] += pts
@@ -748,7 +753,8 @@ function playGame(A: Side, B: Side, homeAdv: number, wantLog: boolean, weather: 
       } else if (r < 0.42) {
         const dl = onField(ddf, rnd() < 0.7 ? 'DL' : 'LB', q, dbl); text = `Sacked by ${nm(dl)} on third down. Punt`; give(dl, 'sack'); st(dl) && st(dl)!.sacks++
       } else {
-        text = gained < 10 ? 'Three and out. Punt' : end >= 45 && end <= 60 ? pick(['Stalled near midfield. Punt', 'Turned over on downs']) : pick(['Drive stalls. Punt', 'Turned over on downs'])
+        // Most stalled drives punt; going for it and failing is rarer (about 1 in 20 drives).
+        text = gained < 10 ? 'Three and out. Punt' : rnd() < 0.2 && end >= 40 ? 'Turned over on downs' : end >= 45 && end <= 60 ? 'Stalled near midfield. Punt' : 'Drive stalls. Punt'
         if (text === 'Turned over on downs') result = 'downs'
       }
     }
@@ -1856,13 +1862,14 @@ export const AD_PRESTIGE = 0.15
 export const AD_POINTS = 10
 function makeGoals(g: State): Goal[] {
   const me = g.teams[g.user], pr = me.prestige, conf = g.confNames[me.conf]
-  const wins = clamp(Math.round(1.5 + pr * 0.85), 3, 10)
+  const wins = clamp(Math.round(1 + pr * 0.8), 3, 9)
   const recruits = clamp(Math.round(pr / 2.5), 1, 4)
   const goals: Goal[] = [{ kind: 'wins', target: wins, text: `Win ${wins} regular-season games` }]
-  const rankTarget = pr >= 8 ? 5 : pr >= 6.5 ? 10 : pr >= 5 ? 15 : 0
+  const rankTarget = pr >= 9 ? 5 : pr >= 7.5 ? 10 : pr >= 6 ? 15 : pr >= 5 ? 20 : 0
   if (rankTarget) goals.push({ kind: 'rank', target: rankTarget, text: `Finish in the top ${rankTarget}` })
   else { const cw = pr >= 3.5 ? 4 : pr >= 2 ? 3 : 2; goals.push({ kind: 'confWins', target: cw, text: `Win ${cw} ${conf} games` }) }
-  if (pr >= 7) goals.push({ kind: 'conf', target: 1, text: `Win the ${conf}` })
+  if (pr >= 9) goals.push({ kind: 'conf', target: 1, text: `Win the ${conf}` })
+  else if (pr >= 7) goals.push({ kind: 'conf', target: 2, text: `Reach the ${conf} title game` })
   else goals.push({ kind: 'recruits', target: recruits, text: `Sign ${recruits} recruit${recruits > 1 ? 's' : ''} rated 3★ or better` })
   return goals
 }

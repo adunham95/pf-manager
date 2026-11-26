@@ -151,8 +151,6 @@ button.prow:hover { background: var(--soft); }
 .pill.K { --pc: var(--K); } .pill.DL { --pc: var(--DL); } .pill.LB { --pc: var(--LB); } .pill.DB { --pc: var(--DB); }
 .pill.none { --pc: #8892a6; }
 .pill.need { outline: 2px solid var(--hot); }
-.avatar { display: grid; place-items: center; flex: none; width: 36px; height: 36px; border-radius: 50%; background: color-mix(in srgb, var(--c) 85%, #000);
-  color: #fff; font-family: 'Pixelify Sans', monospace; font-size: 13px; }
 .who { flex: 1; }
 .pname { font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .psub { font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -741,3 +739,11 @@ input[type=color] { width: 36px; height: 32px; border: 1px solid var(--line); bo
 .gc-feed li.scored.mine { background: color-mix(in srgb, var(--win) 11%, transparent); }
 .gc-feed li.scored:not(.mine) { background: color-mix(in srgb, var(--hot) 8%, transparent); }
 .gc-feed li:not(.scored) { color: var(--muted); }
+
+/* pixel player faces */
+.face { flex: none; display: block; width: 36px; height: 36px; border-radius: 50%; image-rendering: pixelated;
+  background: color-mix(in srgb, var(--c) 16%, var(--soft)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c) 30%, transparent); }
+.face.sm { width: 32px; height: 32px; }
+.face.lg { width: 64px; height: 64px; border-radius: 16px; }
+.posline { display: flex; align-items: center; gap: 8px; margin-top: 2px; }
+.posline .pill { margin: 0; }
