@@ -7,6 +7,8 @@ export interface Player {
   id: number; first: string; last: string; pos: Pos; year: number
   ovr: number; pot: number; dev: Dev; stars: number; snaps: number; walkOn?: boolean; inj?: number; lock?: boolean
   trait?: Trait
+  /** The four skills for his position (see SKILLS). OVR is their weighted average. */
+  skills?: number[]
 }
 export interface Team {
   id: number; school: string; mascot: string; abbr: string; color: string
@@ -30,6 +32,7 @@ export interface Recruit {
   ovr: number; pot: number; dev: Dev; scouted: boolean; offered: boolean; visited: boolean
   interest: number; rival: number; rivalTeam: number; committed: number | null
   trait?: Trait
+  skills?: number[]
   /** Week of a game-day visit. A home win that week adds interest, a loss takes some away. */
   visitWeek?: number
 }
@@ -59,7 +62,10 @@ export interface State {
   year: number; week: number; phase: 'season' | 'offseason'
   user: number; teams: Team[]; cupcakes: Team[]; confNames: string[]
   schedule: Game[]; recruits: Recruit[]; points: number; focus: number[]
-  rotation: number; plan?: Plan; fans?: number; news: string[]; history: { year: number; record: string; finish: string; prestige: number }[]
+  rotation: number; plan?: Plan; fans?: number; news: string[];
+  /** Which skill each player in training works on (index into SKILLS[pos]). */
+  focusSkill?: Record<number, number>
+  history: { year: number; record: string; finish: string; prestige: number }[]
   champion: number | null; report: SeasonReport | null
   portal?: Portal | null
   recap?: Recap | null
@@ -71,6 +77,75 @@ export interface State {
   /** Booster money in $M, spent on facilities. */
   boosters?: number
   drafts?: DraftClass[]
+}
+
+// ---------- Skills ----------
+/** Four skills per position. Order matters: SKILL_WEIGHTS and styleRatings() use the same order. */
+export const SKILLS: Record<Pos, [string, string, string, string]> = {
+  QB: ['Accuracy', 'Throw power', 'Vision', 'Poise'],
+  RB: ['Speed', 'Power', 'Elusiveness', 'Hands'],
+  WR: ['Speed', 'Hands', 'Route running', 'Elusiveness'],
+  TE: ['Hands', 'Blocking', 'Speed', 'Route running'],
+  DL: ['Pass rush', 'Run stop', 'Strength', 'Quickness'],
+  LB: ['Tackling', 'Coverage', 'Blitz', 'Instincts'],
+  DB: ['Coverage', 'Speed', 'Ball skills', 'Tackling'],
+  K: ['Kick power', 'Accuracy', 'Clutch', 'Consistency'],
+}
+/** How much each skill counts toward OVR. Each row adds up to 1. */
+export const SKILL_WEIGHTS: Record<Pos, [number, number, number, number]> = {
+  QB: [0.35, 0.25, 0.25, 0.15],
+  RB: [0.3, 0.25, 0.3, 0.15],
+  WR: [0.3, 0.3, 0.25, 0.15],
+  TE: [0.3, 0.35, 0.15, 0.2],
+  DL: [0.3, 0.3, 0.2, 0.2],
+  LB: [0.3, 0.25, 0.2, 0.25],
+  DB: [0.35, 0.25, 0.2, 0.2],
+  K: [0.35, 0.35, 0.15, 0.15],
+}
+const r1 = (n: number) => Math.round(n * 10) / 10
+export const skillOvr = (pos: Pos, sk: number[]) => SKILL_WEIGHTS[pos].reduce((n, w, i) => n + w * sk[i], 0)
+/** Skills spread around an OVR, up to about 9 either way, shifted so their weighted average is exactly that OVR. */
+function makeSkills(ovr: number, pos: Pos, roll: () => number) {
+  const w = SKILL_WEIGHTS[pos]
+  const off = w.map(() => (roll() * 2 - 1) * 9)
+  const c = off.reduce((n, o, i) => n + o * w[i], 0)
+  return off.map(o => clamp(r1(ovr + o - c), 20, 99))
+}
+/** Skills for a player or recruit from before skills existed, from a hash so OVR stays the same and nothing random is used. */
+function skillsFor(x: { id: number; ovr: number; pos: Pos }) {
+  let k = 0
+  return makeSkills(x.ovr, x.pos, () => hashRoll(x.id, k++, 77))
+}
+export function skillsOf(p: { id: number; ovr: number; pos: Pos; skills?: number[] }) {
+  return p.skills ?? (p.skills = skillsFor(p))
+}
+/**
+ * Growth in OVR points, never past potential. With a focus skill, all of it goes into that skill
+ * (so the skill jumps more than OVR does). Otherwise it spreads evenly over all four.
+ */
+function addGrowth(p: Player, amt: number, focus?: number) {
+  const sk = skillsOf(p), w = SKILL_WEIGHTS[p.pos]
+  const room = p.pot - skillOvr(p.pos, sk)
+  if (amt <= 0 || room <= 0) return
+  amt = Math.min(amt, room)
+  if (focus === undefined) for (let i = 0; i < 4; i++) sk[i] = Math.min(99, r1(sk[i] + amt))
+  else sk[focus] = Math.min(99, r1(sk[focus] + amt / w[focus]))
+  p.ovr = r1(skillOvr(p.pos, sk))
+}
+/** Gives every player and recruit in an older save their skills. */
+function ensureSkills(g: State) {
+  for (const t of [...g.teams, ...g.cupcakes]) for (const p of t.roster) skillsOf(p)
+  for (const r of g.recruits) skillsOf(r)
+}
+export const trainingSkill = (g: State, id: number) => g.focus.includes(id) ? (g.focusSkill?.[id] ?? 0) : null
+/** Puts a player in training on one skill, or switches his skill. Training the same skill again stops it. */
+export function setTraining(g: State, id: number, skill: number) {
+  if (g.focus.includes(id)) {
+    if ((g.focusSkill?.[id] ?? 0) === skill) { toggleFocus(g, id); return '' }
+  } else if (g.focus.length >= MAX_FOCUS) return `Only ${MAX_FOCUS} players can train at a time.`
+  else g.focus.push(id)
+  g.focusSkill = { ...(g.focusSkill ?? {}), [id]: skill }
+  return ''
 }
 
 // ---------- Traits ----------
@@ -176,6 +251,7 @@ function makePlayer(g: State, pos: Pos, stars: number, year: number, walkOn = fa
   const dev = rollDev()
   for (let y = 1; y < year; y++) ovr = Math.min(pot, ovr + Math.round((pot - ovr) * 0.3 * DEV_MULT[dev]) + ri(0, 2))
   const p: Player = { id: newId(g), first: pick(FIRST), last: pick(LAST), pos, year, ovr, pot, dev, stars, snaps: 0, walkOn }
+  p.skills = makeSkills(ovr, pos, rnd)
   const trait = rollTrait()
   if (trait) p.trait = trait
   return p
@@ -300,8 +376,9 @@ function makeRecruits(g: State): Recruit[] {
     const stars = starRoll()
     const { ovr, pot } = ratingsForStars(stars)
     const rivals = g.teams.filter(t => t.id !== g.user).sort((a, b) => Math.abs(a.prestige - stars * 2) - Math.abs(b.prestige - stars * 2) + (rnd() - 0.5) * 3)
+    const pos = pick(weights)
     list.push({
-      id: newId(g), first: pick(FIRST), last: pick(LAST), pos: pick(weights), stars, ovr, pot, dev: rollDev(),
+      id: newId(g), first: pick(FIRST), last: pick(LAST), pos, stars, ovr, pot, dev: rollDev(), skills: makeSkills(ovr, pos, rnd),
       scouted: false, offered: false, visited: false, interest: ri(0, 15),
       rival: 28 + stars * 13 + ri(0, 15), rivalTeam: rivals[0].id, committed: null, trait: rollTrait(),
     })
@@ -423,14 +500,30 @@ export const DEFAULT_PLAN: Plan = { off: 'balanced', def: 'balanced' }
 const RUN_SHARE: Record<Lean, number> = { run: 0.7, balanced: 0.5, pass: 0.3 }
 /** How much the game plan matters. 1.5 puts smart plans about 5 win% above balanced. */
 const PLAN_WEIGHT = 1.5
+/** Like groupRating, for a mix of skills at one position instead of OVR. */
+function groupSkill(d: ReturnType<typeof depth>, pos: Pos, mix: number[], blend: number) {
+  const val = (p: Player) => { const sk = skillsOf(p); return mix.reduce((n, w, i) => n + w * sk[i], 0) }
+  const n = STARTERS[pos], st = d[pos].starters
+  const sum = (ps: Player[]) => ps.reduce((t, p) => t + val(p), 0)
+  const stAvg = (sum(st) + (n - st.length) * EMERGENCY_OVR) / n
+  const bu = d[pos].backups.slice(0, n)
+  if (!bu.length) return stAvg
+  const rotAvg = (sum(bu) + sum(st.slice(bu.length)) + (n - Math.max(st.length, bu.length)) * EMERGENCY_OVR) / n
+  return stAvg * (1 - blend) + rotAvg * blend
+}
+/** Run and pass strength on both sides of the ball, built from the skills that matter for each. Feeds the game plan and scouting. */
 export function styleRatings(team: Team, blend = 0) {
   const d = depth(team)
-  const R = (p: Pos) => groupRating(d, p, blend)
+  const S = (pos: Pos, mix: number[]) => groupSkill(d, pos, mix, blend)
   return {
-    runOff: R('RB') * 0.5 + R('QB') * 0.25 + R('TE') * 0.25,
-    passOff: R('QB') * 0.5 + R('WR') * 0.4 + R('TE') * 0.1,
-    runDef: R('DL') * 0.55 + R('LB') * 0.45,
-    passDef: R('DB') * 0.6 + R('LB') * 0.2 + R('DL') * 0.2,
+    // RB speed, power, elusiveness; TE blocking; QB vision
+    runOff: S('RB', [0.3, 0.35, 0.35, 0]) * 0.5 + S('TE', [0, 1, 0, 0]) * 0.25 + S('QB', [0, 0, 1, 0]) * 0.25,
+    // QB accuracy, throw power, poise; WR speed, hands, routes; TE hands and routes
+    passOff: S('QB', [0.45, 0.3, 0, 0.25]) * 0.5 + S('WR', [0.3, 0.35, 0.35, 0]) * 0.4 + S('TE', [0.6, 0, 0, 0.4]) * 0.1,
+    // DL run stop and strength; LB tackling and instincts
+    runDef: S('DL', [0, 0.6, 0.4, 0]) * 0.55 + S('LB', [0.6, 0, 0, 0.4]) * 0.45,
+    // DB coverage, speed, ball skills; LB coverage and blitz; DL pass rush and quickness
+    passDef: S('DB', [0.5, 0.25, 0.25, 0]) * 0.6 + S('LB', [0, 0.6, 0.4, 0]) * 0.2 + S('DL', [0.7, 0, 0, 0.3]) * 0.2,
   }
 }
 type Style = ReturnType<typeof styleRatings>
@@ -583,7 +676,7 @@ function playerOfGame(team: Team, credit: ReturnType<typeof playGame>['credit'])
   return best ? `${best.pos} ${best.first} ${best.last}: ${line}` : undefined
 }
 const BLEND_GROWTH = [0, 0.25, 0.6]
-function applySnaps(team: Team, blend: number, isUser: boolean, focus: number[], injMult = 1, devMult: (p: Player) => number = () => 1, heal = 0): string[] {
+function applySnaps(team: Team, blend: number, isUser: boolean, focus: number[], injMult = 1, devMult: (p: Player) => number = () => 1, heal = 0, focusSkill: Record<number, number> = {}): string[] {
   const d = depth(team)
   const played: [Player, number][] = []
   for (const pos of POSITIONS) {
@@ -595,7 +688,7 @@ function applySnaps(team: Team, blend: number, isUser: boolean, focus: number[],
       if (snaps > 0) grow(p, (blend >= 0.5 ? BLEND_GROWTH[2] : BLEND_GROWTH[1]) * devMult(p))
     }
   }
-  if (isUser) for (const id of focus) { const p = team.roster.find(x => x.id === id); if (p) grow(p, 0.35 * (p.trait === 'Gym rat' ? 2 : 1) * devMult(p)) }
+  if (isUser) for (const id of focus) { const p = team.roster.find(x => x.id === id); if (p) grow(p, 0.35 * (p.trait === 'Gym rat' ? 2 : 1) * devMult(p), focusSkill[id] ?? 0) }
   const hurt: string[] = []
   for (const [p, snaps] of played) {
     p.snaps += snaps
@@ -606,10 +699,10 @@ function applySnaps(team: Team, blend: number, isUser: boolean, focus: number[],
   }
   return hurt
 }
-function grow(p: Player, amt: number) {
+function grow(p: Player, amt: number, focus?: number) {
   const gap = p.pot - p.ovr
   if (gap <= 0) return
-  p.ovr = Math.min(p.pot, Math.round((p.ovr + amt * DEV_MULT[p.dev] * (gap > 15 ? 1.2 : 1)) * 10) / 10)
+  addGrowth(p, amt * DEV_MULT[p.dev] * (gap > 15 ? 1.2 : 1), focus)
 }
 
 export const team = (g: State, id: number) => id >= 100 ? g.cupcakes[id - 100] : g.teams[id]
@@ -662,8 +755,8 @@ export function simWeek(g: State) {
     const im = INJ_MULT[settingsOf(g).injuries]
     const med = facilityLevel(g, 'medical')
     const userInj = im * (1 - med * 0.12), heal = Math.floor(med / 2)
-    const hurtH = h.conf >= 0 ? applySnaps(h, hb, userHome, g.focus, userHome ? userInj : im, userHome ? p => devBoost(g, p) : undefined, userHome ? heal : 0) : []
-    const hurtA = a.conf >= 0 ? applySnaps(a, ab, userAway, g.focus, userAway ? userInj : im, userAway ? p => devBoost(g, p) : undefined, userAway ? heal : 0) : []
+    const hurtH = h.conf >= 0 ? applySnaps(h, hb, userHome, g.focus, userHome ? userInj : im, userHome ? p => devBoost(g, p) : undefined, userHome ? heal : 0, g.focusSkill) : []
+    const hurtA = a.conf >= 0 ? applySnaps(a, ab, userAway, g.focus, userAway ? userInj : im, userAway ? p => devBoost(g, p) : undefined, userAway ? heal : 0, g.focusSkill) : []
     if (isUser) {
       const opp = userHome ? a : h
       const my = userHome ? hs : as, their = userHome ? as : hs, win = my > their
@@ -1179,7 +1272,8 @@ export function advanceOffseason(g: State) {
       const before = p.ovr
       const snapBonus = Math.min(3, p.snaps / 250)
       const mult = t.id === g.user ? devBoost(g, p) : 1
-      p.ovr = Math.min(p.pot, Math.round(p.ovr + (p.pot - p.ovr) * 0.28 * DEV_MULT[p.dev] * mult + snapBonus + ri(0, 2) + (p.trait === 'Gym rat' ? 1 : 0)))
+      const next = Math.min(p.pot, Math.round(p.ovr + (p.pot - p.ovr) * 0.28 * DEV_MULT[p.dev] * mult + snapBonus + ri(0, 2) + (p.trait === 'Gym rat' ? 1 : 0)))
+      addGrowth(p, next - p.ovr)
       p.year++; p.snaps = 0
       if (t.id === g.user && p.ovr - before >= 8) report.bigJumps.push(`${p.pos} ${p.first} ${p.last} +${Math.round(p.ovr - before)} (now ${p.ovr})`)
     }
@@ -1189,7 +1283,7 @@ export function advanceOffseason(g: State) {
     if (r.committed === null) r.committed = r.rivalTeam
     const t = g.teams[r.committed]
     if (t.roster.length >= ROSTER_MAX && t.id !== g.user) continue
-    t.roster.push({ id: r.id, first: r.first, last: r.last, pos: r.pos, year: 1, ovr: r.ovr, pot: r.pot, dev: r.dev, stars: r.stars, snaps: 0, ...(r.trait ? { trait: r.trait } : {}) })
+    t.roster.push({ id: r.id, first: r.first, last: r.last, pos: r.pos, year: 1, ovr: r.ovr, pot: r.pot, dev: r.dev, stars: r.stars, snaps: 0, skills: [...skillsOf(r)], ...(r.trait ? { trait: r.trait } : {}) })
     if (t.id === g.user) report.signed.push(`${'★'.repeat(r.stars)} ${r.pos} ${r.first} ${r.last}`)
   }
   for (const t of g.teams) {
@@ -1199,7 +1293,7 @@ export function advanceOffseason(g: State) {
   }
   // reset season
   for (const t of g.teams) { t.w = t.l = t.cw = t.cl = 0; t.confChamp = t.playoff = t.champ = false }
-  g.year++; g.week = 1; g.phase = 'season'; g.champion = null; g.focus = []; g.rotation = 0
+  g.year++; g.week = 1; g.phase = 'season'; g.champion = null; g.focus = []; g.focusSkill = {}; g.rotation = 0
   g.schedule = makeSchedule(g)
   g.recruits = makeRecruits(g)
   g.staffMarket = makeMarket(g)
@@ -1396,6 +1490,7 @@ export const weeklyPoints = (g: State) => POINTS_PER_WEEK + (g.ad?.bonus ?? 0)
 /** Gives older saves a staff, a hiring market and AD goals. */
 export function ensureProgram(g: State) {
   if (g.boosters === undefined) { g.boosters = STARTING_BOOSTERS; g.facilities = g.facilities ?? {} }
+  ensureSkills(g)
   if (g.staff && g.staffMarket && g.ad) return
   const seeded = getSeed()
   setSeed(g.seed)

@@ -370,6 +370,22 @@ button.srow { width: 100%; text-align: left; background: none; border: 0; border
 .fanmood { font-family: 'Barlow Condensed', sans-serif; font-weight: 800; font-size: 22px; }
 .fanfx { margin: 6px 0 0; padding-left: 18px; color: var(--muted); }
 
+/* skills */
+.skills { display: grid; gap: 4px; margin-top: 6px; }
+.skillrow { display: grid; grid-template-columns: minmax(0, 9em) minmax(0, 1fr) 2.2em 4.6em; align-items: center; gap: 10px;
+  padding: 7px 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--card); font-size: 14px; text-align: left; }
+.skillrow.static { grid-template-columns: minmax(0, 9em) minmax(0, 1fr) 2.2em; }
+button.skillrow:not(:disabled):hover { border-color: var(--blue); }
+.skillrow.on { border-color: var(--blue); background: color-mix(in srgb, var(--blue) 9%, var(--card)); }
+.skname { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.skname em { font-style: normal; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin-left: 6px; }
+.skbar { height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
+.skbar i { display: block; height: 100%; border-radius: 3px; background: var(--blue); }
+.skillrow b { font-family: 'Barlow Condensed', sans-serif; font-size: 18px; text-align: right; font-variant-numeric: tabular-nums; }
+.sktrain { font-size: 12px; font-weight: 700; color: var(--muted); text-align: right; }
+.skillrow.on .sktrain { color: var(--blue); }
+.skillhelp { margin: 6px 0 0; }
+
 /* rankings */
 .ranklayout { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 4fr); gap: 16px; align-items: start; margin-bottom: 16px; }
 .rk { color: var(--muted); font-weight: 600; font-size: .85em; }

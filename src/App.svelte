@@ -246,6 +246,10 @@
   function hire(id: number) { if (g) flash(G.hireCoach(g, id)) }
   const RECAP_ICON: Record<G.RecapKind, string> = { injury: '✚', commit: '★', lost: '✕', visit: '⌂', goal: '✓', league: '🏆', trait: '⚡', info: '•', spotlight: '📺' }
   const traitTag = (t?: G.Trait) => t ? G.TRAITS[t] : null
+  function train(p: Player, i: number) { if (g) flash(G.setTraining(g, p.id, i)) }
+  const trainName = (p: Player) => { const i = g ? G.trainingSkill(g, p.id) : null; return i === null ? null : G.SKILLS[p.pos][i] }
+  /** The skill or two that count most toward OVR at a position. */
+  const keySkill = (pos: Pos, i: number) => G.SKILL_WEIGHTS[pos][i] >= Math.max(...G.SKILL_WEIGHTS[pos]) - 0.001
   const portal = $derived(g?.portal ?? null)
   const myEntries = $derived(portal ? portal.entries.filter(e => e.from === g!.user) : [])
   const pList = $derived(!portal ? [] : portal.entries.filter(e =>
@@ -325,7 +329,7 @@
     </span>
     <span class="tags">
       {#if p.inj}<span class="tag out">Out {p.inj}w</span>{/if}
-      {#if g?.focus.includes(p.id)}<span class="tag train">Training</span>{/if}
+      {#if g?.focus.includes(p.id)}<span class="tag train">Training {trainName(p)?.toLowerCase()}</span>{/if}
       {#if g?.phase === 'season'}
         {@const m = moodOf.get(p.id)}
         {#if m && (m.mood === 'Unhappy' || m.mood === 'Wants out')}<span class="tag mood {m.mood === 'Wants out' ? 'out' : 'low'}" title="Playing {pct(m.share)} of snaps, expects {pct(m.expect)}">{m.mood}</span>{/if}
@@ -395,6 +399,30 @@
   {/if}
 {/snippet}
 
+{#snippet skillList(pos: Pos, skills: number[], p: Player | null = null)}
+  {@const tr = p && g ? G.trainingSkill(g, p.id) : null}
+  <div class="skills">
+    {#each G.SKILLS[pos] as name, i}
+      {@const v = skills[i]}
+      {#if p}
+        <button class="skillrow" class:on={tr === i} onclick={() => train(p, i)}
+          disabled={tr === null && (g?.focus.length ?? 0) >= G.MAX_FOCUS} aria-pressed={tr === i}>
+          <span class="skname">{name}{#if keySkill(pos, i)}<em>key</em>{/if}</span>
+          <span class="skbar"><i style="width:{v}%"></i></span>
+          <b>{Math.round(v)}</b>
+          <span class="sktrain">{tr === i ? 'Training' : 'Train'}</span>
+        </button>
+      {:else}
+        <div class="skillrow static">
+          <span class="skname">{name}{#if keySkill(pos, i)}<em>key</em>{/if}</span>
+          <span class="skbar"><i style="width:{v}%"></i></span>
+          <b>{Math.round(v)}</b>
+        </div>
+      {/if}
+    {/each}
+  </div>
+{/snippet}
+
 {#snippet traitBox(t: G.Trait)}
   <div class="traitbox" class:bad={!G.TRAITS[t].good}><b>{t}</b><span>{G.TRAITS[t].text}</span></div>
 {/snippet}
@@ -429,7 +457,7 @@
       <span class="tag" class:ok={isStarter}>{p.inj ? `Out ${p.inj}w` : isStarter ? 'Starter' : 'Bench'}</span>
       {#if p.walkOn}<span class="tag">Walk-on</span>{/if}
       {#if p.lock}<span class="tag">Locked in lineup</span>{/if}
-      {#if g?.focus.includes(p.id)}<span class="tag train">Training</span>{/if}
+      {#if g?.focus.includes(p.id)}<span class="tag train">Training {trainName(p)?.toLowerCase()}</span>{/if}
       {#if p.year >= 4}<span class="tag">Graduates this year</span>{/if}
     </div>
     <div class="rd-ratings">
@@ -439,8 +467,9 @@
     </div>
     {#if p.trait}{@render traitBox(p.trait)}{/if}
     <div>
-      <div class="race-top small"><span class="muted">Room to grow</span><b>{Math.max(0, Math.round(p.pot - p.ovr))}</b></div>
-      <span class="meter wide"><i style="width:{Math.min(100, p.ovr / Math.max(p.pot, 1) * 100)}%"></i></span>
+      <div class="race-top small"><span class="muted">Skills · tap one to train it</span><span class="muted small">{g?.focus.length}/{G.MAX_FOCUS} training slots</span></div>
+      {@render skillList(p.pos, G.skillsOf(p), p)}
+      <p class="muted small skillhelp">{p.ovr >= p.pot ? 'He has reached his potential, so training won\'t raise him any more.' : 'Training puts all of his weekly work into one skill. Key skills count most toward OVR, but every skill matters on game day.'}</p>
     </div>
     {#if p.year < 4}
       <div class="race">
@@ -463,9 +492,9 @@
       {#if !isStarter && !p.inj}
         <button class="atile" onclick={() => { swapFrom = p.id; playerSel = null }}><b>Start him</b><small>Pick who he replaces</small></button>
       {/if}
-      <button class="atile plain" class:on={g?.focus.includes(p.id)} onclick={() => G.toggleFocus(g!, p.id)} disabled={!g?.focus.includes(p.id) && (g?.focus.length ?? 0) >= G.MAX_FOCUS}>
-        <b>{g?.focus.includes(p.id) ? 'Stop training' : 'Train'}</b><small>{g?.focus.length}/{G.MAX_FOCUS} training slots</small>
-      </button>
+      {#if g?.focus.includes(p.id)}
+        <button class="atile plain" onclick={() => G.toggleFocus(g!, p.id)}><b>Stop training</b><small>Frees a training slot</small></button>
+      {/if}
       {#if !isStarter}
         <button class="atile plain danger" onclick={() => release(p.id)}><b>{releaseId === p.id ? 'Click again to cut' : 'Cut'}</b><small>Frees a roster spot</small></button>
       {/if}
@@ -496,6 +525,7 @@
       <div><b>{G.grade(e.p.pot)}</b><small>Potential</small></div>
       <div><b class="dev {e.p.dev}">{e.p.dev}</b><small>Dev trait</small></div>
     </div>
+    {@render skillList(e.p.pos, G.skillsOf(e.p))}
     {#if e.p.trait}{@render traitBox(e.p.trait)}{/if}
     <div class="race">
       <div class="race-top">
@@ -548,7 +578,10 @@
       <div><b class={r.scouted ? `dev ${r.dev}` : ''}>{r.scouted ? r.dev : '?'}</b><small>Dev trait</small></div>
     </div>
     {#if !r.scouted}<p class="muted small">Not scouted. OVR is a range based on stars, and his trait is hidden.</p>
-    {:else if r.trait}{@render traitBox(r.trait)}{/if}
+    {:else}
+      {@render skillList(r.pos, G.skillsOf(r))}
+      {#if r.trait}{@render traitBox(r.trait)}{/if}
+    {/if}
     {#if r.visitWeek === g!.week && g!.phase === 'season' && r.committed === null}<div class="tag ok startstag">Visiting for this week's home game</div>{/if}
 
     <div class="race">
