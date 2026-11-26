@@ -18,6 +18,19 @@
   let g = $state<State | null>(load())
   type Tab = 'team' | 'recruits' | 'portal' | 'program' | 'schedule' | 'postseason' | 'league' | 'history' | 'settings'
   let tab = $state<Tab>('team')
+  const TABS: { k: Tab; label: string; icon: string }[] = [
+    { k: 'team', label: 'My Team', icon: '🏈' }, { k: 'recruits', label: 'Recruits', icon: '🎯' }, { k: 'portal', label: 'Portal', icon: '🔁' },
+    { k: 'program', label: 'Program', icon: '🏛' }, { k: 'schedule', label: 'Schedule', icon: '📅' }, { k: 'league', label: 'League', icon: '🏆' },
+    { k: 'postseason', label: 'Postseason', icon: '🏟' }, { k: 'history', label: 'History', icon: '📜' }, { k: 'settings', label: 'Settings', icon: '⚙' },
+  ]
+  let menuOpen = $state(false)
+  function go(k: Tab) { tab = k; menuOpen = false; window.scrollTo({ top: 0 }) }
+  $effect(() => {
+    if (!menuOpen) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') menuOpen = false }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  })
   let toast = $state('')
   let posFilter = $state<'ALL' | Pos>('ALL')
   let starFilter = $state(0)
@@ -691,12 +704,32 @@
 {:else if me && d && needs}
   <header class="top">
     <div class="brand">PIXEL <b>FOOTBALL</b></div>
+    <span class="pagename">{TABS.find(x => x.k === tab)?.label}</span>
     <nav class="tabs">
-      {#each [['team', 'My Team'], ['recruits', 'Recruits'], ['portal', 'Portal'], ['program', 'Program'], ['schedule', 'Schedule'], ['league', 'League'], ['postseason', 'Postseason'], ['history', 'History'], ['settings', 'Settings']] as [k, l]}
-        <button class:on={tab === k} onclick={() => (tab = k as Tab)}>{l}</button>
+      {#each TABS as t}
+        <button class:on={tab === t.k} onclick={() => (tab = t.k)}>{t.label}</button>
       {/each}
     </nav>
   </header>
+
+  <!-- Phones: a thumb-reach menu button instead of the top tab strip -->
+  <button class="fab" onclick={() => (menuOpen = true)} aria-label="Open menu" aria-expanded={menuOpen} aria-controls="navsheet">
+    <span aria-hidden="true">☰</span>
+  </button>
+  {#if menuOpen}
+    <div class="sheet-backdrop" onclick={(e) => e.target === e.currentTarget && (menuOpen = false)} role="presentation">
+      <div class="sheet" id="navsheet" role="dialog" aria-modal="true" aria-label="Menu">
+        <div class="grabber" aria-hidden="true"></div>
+        <div class="sheetgrid">
+          {#each TABS as t}
+            <button class="sheetitem" class:on={tab === t.k} onclick={() => go(t.k)} aria-current={tab === t.k ? 'page' : undefined}>
+              <span class="sicon" aria-hidden="true">{t.icon}</span><span>{t.label}</span>
+            </button>
+          {/each}
+        </div>
+      </div>
+    </div>
+  {/if}
 
   <section class="teambar">
     <div class="tb-id">
