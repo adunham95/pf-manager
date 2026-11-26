@@ -120,10 +120,15 @@
   const myOvr = $derived(me && myR ? myR.ovr + boostOf(me) : 0)
   const oppOvr = $derived(opp && oppR ? oppR.ovr + boostOf(opp) : 0)
   const plan = $derived(g?.plan ?? G.DEFAULT_PLAN)
-  const scout = $derived(opp && opp.conf >= 0 ? G.scouting(opp) : null)
+  const scout = $derived(opp ? G.scouting(opp) : null)
   // The game plan is left out on purpose, so picking one is a read on the opponent, not a number to max.
   const site = $derived<'home' | 'away' | 'neutral'>(!next || !g ? 'neutral' : G.isNeutral(next) ? 'neutral' : next.home === g.user ? 'home' : 'away')
-  const homeRating = $derived(next && g && site !== 'neutral' ? G.homeEdgeRating(g, next.home) : 0)
+  const spot = $derived(g && g.phase === 'season' ? G.spotlightGame(g) : undefined)
+  const sameGame = (a?: Game, b?: Game) => !!a && !!b && a.week === b.week && a.home === b.home && a.away === b.away
+  const mySpot = $derived(sameGame(spot, next))
+  const weather = $derived(g && next ? G.weatherOf(g, next) : null)
+  const fans = $derived(g ? G.fansOf(g) : 50)
+  const homeRating = $derived(next && g && site !== 'neutral' ? G.homeEdgeRating(g, next.home, mySpot) : 0)
   const prob = $derived(myR && oppR ? G.winProb(myOvr + (site === 'home' ? homeRating : site === 'away' ? -homeRating : 0), oppOvr) : 0.5)
   const SITE_LABEL = { home: 'Home', away: 'Away', neutral: 'Neutral site' }
   const siteOf = (gm: Game): 'home' | 'away' | 'neutral' => G.isNeutral(gm) ? 'neutral' : gm.home === g!.user ? 'home' : 'away'
@@ -239,7 +244,7 @@
   const budget = $derived(g ? G.staffBudget(g) : 0)
   const pay = $derived(g ? G.payroll(g) : 0)
   function hire(id: number) { if (g) flash(G.hireCoach(g, id)) }
-  const RECAP_ICON: Record<G.RecapKind, string> = { injury: '✚', commit: '★', lost: '✕', visit: '⌂', goal: '✓', league: '🏆', trait: '⚡', info: '•' }
+  const RECAP_ICON: Record<G.RecapKind, string> = { injury: '✚', commit: '★', lost: '✕', visit: '⌂', goal: '✓', league: '🏆', trait: '⚡', info: '•', spotlight: '📺' }
   const traitTag = (t?: G.Trait) => t ? G.TRAITS[t] : null
   const portal = $derived(g?.portal ?? null)
   const myEntries = $derived(portal ? portal.entries.filter(e => e.from === g!.user) : [])
@@ -358,6 +363,12 @@
       {/each}
     </tbody>
   </table>
+  <p class="gamefacts">
+    <span>{G.WEATHER_TEXT[G.weatherOf(g!, gm)].icon} {G.WEATHER_TEXT[G.weatherOf(g!, gm)].name}</span>
+    {#if gm.spotlight}<span class="spotchip">📺 Saturday Spotlight</span>{/if}
+    {#if gm.attendance}<span>Attendance {gm.attendance.toLocaleString()}{gm.attendance >= G.stadiumSeats(g!) ? ' (sellout)' : ''}</span>{/if}
+    {#if gm.fanDelta}<span class:up={gm.fanDelta > 0} class:down={gm.fanDelta < 0}>Fans {gm.fanDelta > 0 ? '+' : ''}{gm.fanDelta}</span>{/if}
+  </p>
   {#if gm.potg}<p class="potg"><span class="eyebrow">Player of the game</span> {gm.potg}</p>{/if}
 {/snippet}
 
@@ -608,15 +619,20 @@
   </header>
 
   <section class="teambar">
-    {@render badge(me, 'lg')}
-    <div class="grow">
-      <div class="tname">{me.school} {me.mascot}</div>
-      <div class="muted">{g.year} · {weekLabel} · {g.confNames[me.conf]} · <button class="link inline" onclick={() => openEdit(me.id)}>Edit team</button></div>
+    <div class="tb-id">
+      {@render badge(me, 'lg')}
+      <div class="grow">
+        <div class="tname">{me.school} {me.mascot}</div>
+        <div class="muted">{g.year} · {weekLabel} · {g.confNames[me.conf]} · <button class="link inline" onclick={() => openEdit(me.id)}>Edit team</button></div>
+      </div>
     </div>
-    <div class="stat"><b>{rk(me.id) || 'NR'}</b><small>National rank</small></div>
-    <div class="stat"><b>{me.w}-{me.l}</b><small>Record</small></div>
-    <div class="stat"><b>{me.prestige.toFixed(1)}</b><small>Prestige</small><span class="meter"><i style="width:{me.prestige * 10}%"></i></span></div>
-    <div class="stat"><b>{me.roster.length}/{G.ROSTER_MAX}</b><small>Roster</small></div>
+    <div class="tb-stats">
+      <div class="stat"><small>Rank</small><b>{rk(me.id) || 'NR'}</b></div>
+      <div class="stat"><small>Record</small><b>{me.w}-{me.l}</b></div>
+      <div class="stat"><small>Fans</small><b>{G.fanMood(fans)}</b><span class="meter fanmeter"><i style="width:{fans}%"></i></span></div>
+      <div class="stat"><small>Prestige</small><b>{me.prestige.toFixed(1)}</b><span class="meter"><i style="width:{me.prestige * 10}%"></i></span></div>
+      <div class="stat"><small>Roster</small><b>{me.roster.length}/{G.ROSTER_MAX}</b></div>
+    </div>
   </section>
 
   <main>
@@ -642,6 +658,10 @@
               <p class="muted">On signing day the portal closes, seniors graduate, players develop and your commits and transfers join the roster.</p>
               <button class="btn primary block" onclick={() => G.advanceOffseason(g!)}>Go to signing day</button>
             {:else if next && opp && myR && oppR}
+              {#if mySpot}
+                <div class="spotbanner"><span class="spotlogo">📺 Saturday Spotlight</span>
+                  <span>{site === 'neutral' ? 'The show is live from the title game.' : `The show is live from ${G.team(g, next.home).school}.`} The whole country, and every recruit you've offered, is watching.</span></div>
+              {/if}
               <div class="eyebrow">{weekLabel} · <span class:cupcake={next.type === 'cupcake'}>{typeTag[next.type]}</span> · {SITE_LABEL[site]}</div>
               <div class="score">
                 <div class="side">
@@ -672,6 +692,10 @@
                 {:else if site === 'away'}Road game. Their crowd is on their side, so expect a tougher day.
                 {:else}Neutral site. No home crowd for either team.{/if}
               </p>
+              {#if weather}<p class="wxnote wx-{weather}"><span class="wxicon">{G.WEATHER_TEXT[weather].icon}</span><b>{G.WEATHER_TEXT[weather].name}.</b> {G.WEATHER_TEXT[weather].note}</p>{/if}
+              {#if site === 'home'}<p class="muted small">Fans: {G.fanMood(fans).toLowerCase()}. {fans >= 65 ? 'Expect a packed, loud house.' : fans < 35 ? 'Expect empty seats and a quiet crowd.' : 'A decent crowd should show up.'}</p>{/if}
+              {#if mySpot}<p class="spotnote">Win and you climb the poll, your recruits get excited and your fans go wild. Lose and everyone sees it.</p>
+              {:else if spot}<p class="muted small">This week's Spotlight: <b>{rk(spot.away)}{G.team(g, spot.away).school}</b> at <b>{rk(spot.home)}{G.team(g, spot.home).school}</b>.</p>{/if}
               {#if next.type === 'cupcake'}<p class="hint">Cupcake week. Good time to get your bench real snaps.</p>{/if}
               {#if g.rotation > 0 && noBackup.length}<p class="muted small">No backup at {noBackup.join(', ')}, so those starters stay in.</p>{/if}
               {#if scout}
@@ -911,6 +935,18 @@
             <p class="muted small">Each goal met adds {G.AD_PRESTIGE} prestige and {G.AD_POINTS} recruiting points a week next season{ad.bonus ? ` (this season: +${ad.bonus})` : ''}. Meet fewer than {G.AD_GOALS_TO_PASS} and you get a strike. {G.AD_STRIKES} strikes in a row and you're fired.</p>
           </section>
 
+          <section class="card">
+            <div class="cardhead0"><h3>Fan base</h3><span class="fanmood">{G.fanMood(fans)}</span></div>
+            <span class="meter wide fanmeter big"><i style="width:{fans}%"></i></span>
+            <p class="muted small">Wins fill the stands, especially at home, against ranked teams and in the Spotlight. Losses drain them, and losing to a cupcake is a disaster. Each offseason fans settle toward what your prestige earns, and titles fire them up.</p>
+            <ul class="fanfx small">
+              <li>A louder home crowd ({fans >= 50 ? 'a bigger' : 'a smaller'} home edge than usual)</li>
+              <li>More booster money on signing day</li>
+              <li>Bigger interest swings from home game-day visits</li>
+              <li>Stadium holds {G.stadiumSeats(g).toLocaleString()}. Stadium upgrades add seats.</li>
+            </ul>
+          </section>
+
           <section class="card flush">
             <div class="cardhead"><h3>Facilities</h3><span class="money">${(g.boosters ?? 0).toFixed(1)}M <small class="muted">from boosters</small></span></div>
             {#each G.FACILITY_LIST as f}
@@ -971,7 +1007,7 @@
           {#snippet srowBody()}
             <span class="wk">Wk {gm.week}</span>
             {@render badge(o, 'sm')}
-            <div class="grow"><b>{siteOf(gm) === 'away' ? 'at' : 'vs'} <span class="rk">{rk(o.id)}</span>{o.school}</b><div class="muted small"><span class="sitetag sm" class:home={siteOf(gm) === 'home'}>{SITE_LABEL[siteOf(gm)]}</span> {typeTag[gm.type]}{gm.played && gm.rotation ? (gm.rotation >= 0.5 ? ' · backups played 2nd half' : ' · rotated') : ''}</div></div>
+            <div class="grow"><b>{siteOf(gm) === 'away' ? 'at' : 'vs'} <span class="rk">{rk(o.id)}</span>{o.school}</b><div class="muted small"><span class="sitetag sm" class:home={siteOf(gm) === 'home'}>{SITE_LABEL[siteOf(gm)]}</span> {#if gm.played || gm.week === g!.week}<span title={G.WEATHER_TEXT[G.weatherOf(g!, gm)].name}>{G.WEATHER_TEXT[G.weatherOf(g!, gm)].icon}</span>{' '}{/if}{#if gm.spotlight || sameGame(spot, gm)}<span class="spotchip sm">📺 Spotlight</span>{' '}{/if}{typeTag[gm.type]}{gm.played && gm.rotation ? (gm.rotation >= 0.5 ? ' · backups played 2nd half' : ' · rotated') : ''}</div></div>
             {#if res}<span class="result" class:w={res.w}>{res.w ? 'W' : 'L'} {res.text}</span>{:else}<span class="muted small">Upcoming</span>{/if}
           {/snippet}
           {#if gm.log}
@@ -983,6 +1019,17 @@
       </section>
 
     {:else if tab === 'league'}
+      {#if spot}
+        <section class="card spotcard">
+          <span class="spotlogo">📺 Saturday Spotlight · {weekLabel}</span>
+          <div class="spotmatch">
+            {@render badge(G.team(g, spot.away), 'md')}<b>{rk(spot.away)}{G.team(g, spot.away).school}</b>
+            <span class="muted">at</span>
+            {@render badge(G.team(g, spot.home), 'md')}<b>{rk(spot.home)}{G.team(g, spot.home).school}</b>
+          </div>
+          <span class="muted small">{G.WEATHER_TEXT[G.weatherOf(g, spot)].icon} {G.WEATHER_TEXT[G.weatherOf(g, spot)].name} · The winner gets a bump in the poll.</span>
+        </section>
+      {/if}
       <div class="ranklayout">
         <section class="card flush">
           <div class="cardhead">
@@ -1232,6 +1279,9 @@
           <span>National rank</span>
           <b>{rc.rankBefore <= G.TOP_N ? `#${rc.rankBefore}` : 'NR'} → {rc.rankAfter <= G.TOP_N ? `#${rc.rankAfter}` : 'NR'}</b>
           {#if mv}<span class="mv {mv > 0 ? 'up' : 'down'}">{mv > 0 ? `▲${mv}` : `▼${-mv}`}</span>{/if}
+          <span class="grow"></span>
+          <span>Fans</span><b>{G.fanMood(fans)}</b>
+          {#if rc.result?.fanDelta}<span class="mv {rc.result.fanDelta > 0 ? 'up' : 'down'}">{rc.result.fanDelta > 0 ? `▲${rc.result.fanDelta}` : `▼${-rc.result.fanDelta}`}</span>{/if}
         </div>
         {#if rc.lines.length}
           <ul class="recap-lines">

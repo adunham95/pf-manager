@@ -49,7 +49,14 @@ small, .small { font-size: 13px; }
 .tabs button.on { color: var(--ink); border-bottom-color: var(--blue); }
 .link { background: none; border: 0; color: var(--muted); font-size: 14px; white-space: nowrap; }
 
-.teambar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 24px; max-width: 1240px; margin: 0 auto; padding: 20px max(3vw, 12px) 4px; }
+.teambar { display: grid; gap: 12px; max-width: 1240px; margin: 0 auto; padding: 20px max(3vw, 12px) 4px; }
+.tb-id { display: flex; align-items: center; gap: 14px; }
+.tb-stats { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); background: var(--card); border: 1px solid var(--line); border-radius: 14px; }
+.tb-stats .stat { padding: 10px 16px; gap: 2px; align-content: start; }
+.tb-stats .stat + .stat { border-left: 1px solid var(--line); }
+.tb-stats .stat small { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; }
+.tb-stats .stat b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.tb-stats .meter { width: 100%; max-width: 160px; }
 .tname { font-family: 'Barlow Condensed', sans-serif; font-weight: 800; font-size: clamp(26px, 4vw, 36px); line-height: 1; }
 .stat { display: grid; justify-items: start; }
 .stat b { font-family: 'Barlow Condensed', sans-serif; font-size: 26px; line-height: 1; }
@@ -339,6 +346,30 @@ button.srow { width: 100%; text-align: left; background: none; border: 0; border
 .srow.clickable { cursor: pointer; }
 .srow.clickable:hover { background: var(--soft); }
 
+/* weather, spotlight, fans */
+.wxnote { display: flex; align-items: baseline; gap: 6px; margin: 8px 0 0; padding: 8px 10px; border-radius: 10px; background: var(--soft); font-size: 14px; }
+.wxnote b { white-space: nowrap; }
+.wxicon { font-size: 16px; }
+.wx-snow { background: light-dark(#eef6ff, #15223a); }
+.wx-rain { background: light-dark(#eef3f9, #18202d); }
+.wx-wind { background: light-dark(#f2f5f0, #1a221c); }
+.spotbanner { display: grid; gap: 2px; margin: -4px 0 12px; padding: 10px 12px; border-radius: 10px; font-size: 14px;
+  background: linear-gradient(90deg, #111827, #1f2a44); color: #fff; }
+.spotlogo { font-family: 'Pixelify Sans', monospace; font-weight: 700; font-size: 15px; color: #f5c46a; letter-spacing: .02em; }
+.spotnote { margin: 8px 0 0; font-size: 14px; font-weight: 600; color: light-dark(#8a5200, #f5c46a); }
+.spotchip { display: inline-block; font-size: 12px; font-weight: 700; padding: 1px 7px; border-radius: 5px; background: #1f2a44; color: #f5c46a; }
+.spotchip.sm { font-size: 10px; padding: 1px 5px; vertical-align: 1px; }
+.spotcard { display: grid; gap: 8px; margin-bottom: 16px; background: linear-gradient(90deg, #111827, #1f2a44); color: #fff; border-color: #1f2a44; }
+.spotcard .muted { color: #b7c2d8; }
+.spotmatch { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; font-size: 18px; }
+.gamefacts { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 4px 0; font-size: 13px; color: var(--muted); }
+.gamefacts .up { color: var(--win); font-weight: 700; } .gamefacts .down { color: var(--hot); font-weight: 700; }
+.fanmeter i { background: linear-gradient(90deg, #f5a524, var(--hot)); }
+.fanmeter.big { height: 10px; border-radius: 5px; margin: 8px 0; }
+.fanmeter.big i { border-radius: 5px; }
+.fanmood { font-family: 'Barlow Condensed', sans-serif; font-weight: 800; font-size: 22px; }
+.fanfx { margin: 6px 0 0; padding-left: 18px; color: var(--muted); }
+
 /* rankings */
 .ranklayout { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 4fr); gap: 16px; align-items: start; margin-bottom: 16px; }
 .rk { color: var(--muted); font-weight: 600; font-size: .85em; }
@@ -416,10 +447,12 @@ input[type=color] { width: 36px; height: 32px; border: 1px solid var(--line); bo
   .prow { flex-wrap: wrap; padding: 10px 12px; }
   .prow .who { flex: 1 1 140px; }
   .prow .tags { order: 5; }
-  .teambar { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .teambar > .badge { display: none; }
-  .teambar > .grow { grid-column: 1 / -1; }
-  .teambar .stat b { font-size: 22px; }
+  .teambar { padding-top: 14px; gap: 10px; }
+  .tb-id .badge { width: 44px; height: 44px; font-size: 14px; border-radius: 10px; }
+  .tb-id .muted { font-size: 13px; }
+  .tb-stats .stat { padding: 8px 6px; justify-items: center; text-align: center; }
+  .tb-stats .stat small { font-size: 10px; letter-spacing: .02em; }
+  .tb-stats .stat b { font-size: 17px; }
   table { font-size: 13px; }
   .rmini { width: 96px; }
   .roledoes { padding-left: 16px; }

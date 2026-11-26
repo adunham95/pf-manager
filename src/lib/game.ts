@@ -20,6 +20,10 @@ export interface Game {
   hs?: number; as?: number; played: boolean; rotation?: number
   /** Only for your games: the drive log, both game plans and the player of the game. */
   log?: Drive[]; plan?: Plan; oppPlan?: Plan; potg?: string
+  /** The week's Saturday Spotlight game. */
+  spotlight?: boolean
+  /** Your home games: crowd size, and fan meter change after the game. */
+  attendance?: number; fanDelta?: number
 }
 export interface Recruit {
   id: number; first: string; last: string; pos: Pos; stars: number
@@ -55,7 +59,7 @@ export interface State {
   year: number; week: number; phase: 'season' | 'offseason'
   user: number; teams: Team[]; cupcakes: Team[]; confNames: string[]
   schedule: Game[]; recruits: Recruit[]; points: number; focus: number[]
-  rotation: number; plan?: Plan; news: string[]; history: { year: number; record: string; finish: string; prestige: number }[]
+  rotation: number; plan?: Plan; fans?: number; news: string[]; history: { year: number; record: string; finish: string; prestige: number }[]
   champion: number | null; report: SeasonReport | null
   portal?: Portal | null
   recap?: Recap | null
@@ -84,10 +88,10 @@ function rollTrait(): Trait | undefined {
 }
 
 // ---------- Weekly recap ----------
-export type RecapKind = 'injury' | 'commit' | 'lost' | 'visit' | 'goal' | 'league' | 'trait' | 'info'
+export type RecapKind = 'injury' | 'commit' | 'lost' | 'visit' | 'goal' | 'league' | 'trait' | 'info' | 'spotlight'
 export interface Recap {
   week: number; label: string; rankBefore: number; rankAfter: number
-  result?: { opp: number; my: number; their: number; win: boolean; home: boolean; type: GameType }
+  result?: { opp: number; my: number; their: number; win: boolean; home: boolean; type: GameType; spotlight?: boolean; fanDelta?: number; attendance?: number }
   lines: { kind: RecapKind; text: string }[]
 }
 let building: Recap | null = null
@@ -336,6 +340,80 @@ export function teamRatings(team: Team, blend = 0) {
 }
 
 // ---------- Simulation ----------
+// ---------- Weather ----------
+export type Weather = 'clear' | 'rain' | 'wind' | 'snow' | 'indoors'
+/** pass: rating lost on passing plays, scaled by how much a team throws. drive: change to every drive's success. fg: change to field goal odds. */
+const WEATHER_FX: Record<Weather, { pass: number; drive: number; fg: number }> = {
+  clear: { pass: 0, drive: 0, fg: 0 }, indoors: { pass: 0, drive: 0, fg: 0 },
+  rain: { pass: 3, drive: -0.01, fg: -0.06 },
+  wind: { pass: 4, drive: 0, fg: -0.15 },
+  snow: { pass: 5, drive: -0.03, fg: -0.12 },
+}
+export const WEATHER_TEXT: Record<Weather, { icon: string; name: string; note: string }> = {
+  clear: { icon: '☀', name: 'Clear', note: 'Perfect football weather.' },
+  indoors: { icon: '🏟', name: 'Indoors', note: 'Played under a roof. No weather to worry about.' },
+  rain: { icon: '🌧', name: 'Rain', note: 'A wet ball. Passing and kicking get sloppy.' },
+  wind: { icon: '💨', name: 'Wind', note: 'Gusty. Deep passes and field goals are a gamble.' },
+  snow: { icon: '❄', name: 'Snow', note: 'Hard to throw, hard to kick, hard to score. A day to run it.' },
+}
+/** Chance of rain, wind and late-season snow by conference region (Ridge, Gulf Coast, Heartland, Pacific). */
+const CLIMATE = [
+  { rain: 0.18, wind: 0.08, snow: 0.16 },
+  { rain: 0.26, wind: 0.06, snow: 0 },
+  { rain: 0.12, wind: 0.2, snow: 0.2 },
+  { rain: 0.2, wind: 0.12, snow: 0.06 },
+]
+/** A repeatable 0 to 1 roll from numbers, so weather needs no saved state and doesn't touch the game's RNG. */
+function hashRoll(...xs: number[]) {
+  let h = 2166136261
+  for (const x of xs) { h ^= x + 0x9e3779b9; h = Math.imul(h ^ (h >>> 15), 2246822507); h = Math.imul(h ^ (h >>> 13), 3266489909) }
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296
+}
+/** The forecast for a game, from the home team's region and the week. Snow only shows up from week 9. */
+export function weatherOf(g: State, x: Game): Weather {
+  if (x.type === 'ccg' || x.type === 'final') return 'indoors'
+  const home = team(g, x.home)
+  const c = CLIMATE[home.conf] ?? CLIMATE[0]
+  const r = hashRoll(g.year, x.week, x.home, x.away)
+  const snow = c.snow * clamp((x.week - 8) / 4, 0, 1)
+  return r < snow ? 'snow' : r < snow + c.rain ? 'rain' : r < snow + c.rain + c.wind ? 'wind' : 'clear'
+}
+
+// ---------- Saturday Spotlight ----------
+/** Extra poll score for winning the Spotlight game. */
+const SPOTLIGHT_RANK_BONUS = 1.2
+/**
+ * The week's biggest game: the one with the best-ranked pair of teams. Fixed once it's been played,
+ * otherwise picked from the current poll, so the preview and the game match.
+ */
+export function spotlightGame(g: State, week = g.week): Game | undefined {
+  const games = g.schedule.filter(x => x.week === week && x.type !== 'cupcake')
+  const set = games.find(x => x.spotlight)
+  if (set || games.some(x => x.played)) return set
+  if (!games.length) return undefined
+  const rank = new Map(rankAt(g, lastPlayedWeek(g)).map(r => [r.team.id, r.rank]))
+  const val = (id: number) => { const r = rank.get(id) ?? 99; return r <= TOP_N ? TOP_N + 1 - r : 0 }
+  const score = (x: Game) => val(x.home) + val(x.away) + (val(x.home) && val(x.away) ? 10 : 0) + (x.type === 'conf' ? 1 : 0) - x.home / 1000
+  return [...games].sort((a, b) => score(b) - score(a))[0]
+}
+
+// ---------- Fan meter ----------
+export const fansOf = (g: State) => g.fans ?? clamp(Math.round(35 + g.teams[g.user].prestige * 4), 0, 100)
+export function fanMood(f: number) {
+  return f >= 85 ? 'Rabid' : f >= 65 ? 'Fired up' : f >= 45 ? 'Steady' : f >= 25 ? 'Restless' : 'Apathetic'
+}
+/** Seats in your stadium. Each stadium level adds 9,000. */
+export const stadiumSeats = (g: State) => 35000 + facilityLevel(g, 'stadium') * 9000
+function attendanceFor(g: State, spotlight: boolean) {
+  const share = clamp(0.4 + fansOf(g) / 100 * 0.65 + (spotlight ? 0.1 : 0), 0, 1)
+  return Math.round(stadiumSeats(g) * share / 100) * 100
+}
+/** How a result moves your fans. Home results count more, a cupcake loss is a disaster. */
+function fanSwing(win: boolean, home: boolean, oppRanked: boolean, spotlight: boolean, cupcake: boolean, margin: number) {
+  if (win) return (home ? 4 : 2) + (oppRanked ? 3 : 0) + (spotlight ? 5 : 0) - (cupcake ? 3 : 0)
+  return -((home ? 5 : 3) + (margin >= 21 ? 3 : 0) + (cupcake ? 12 : 0) + (spotlight ? 2 : 0))
+}
+
 // ---------- Game plan ----------
 export type Lean = 'run' | 'balanced' | 'pass'
 export const LEANS: Lean[] = ['run', 'balanced', 'pass']
@@ -367,13 +445,15 @@ export function planEdge(o: Style, offLean: Lean, d: Style, defLean: Lean) {
   return { off, def }
 }
 /** What a coach would call against this opponent. With `rng`, a quarter of offenses and a third of defenses mix it up. */
-export function aiPlan(t: Team, opp: Team, rng = true): Plan {
+export function aiPlan(t: Team, opp: Team, rng = true, weather: Weather = 'clear'): Plan {
   if (t.conf < 0) return { ...DEFAULT_PLAN }
   const me = styleRatings(t), them = styleRatings(opp)
   const lean = (x: number): Lean => x > 3 ? 'run' : x < -3 ? 'pass' : 'balanced'
   let off = lean((me.runOff - them.runDef) - (me.passOff - them.passDef))
   let def = lean((them.runOff - me.runDef) - (them.passOff - me.passDef))
   if (rng) { if (rnd() < 0.25) off = pick(LEANS); if (rnd() < 0.35) def = pick(LEANS) }
+  // Bad weather: coaches keep the ball on the ground and expect the other team to as well.
+  if (WEATHER_FX[weather].pass >= 4) { if (off === 'pass') off = 'balanced'; if (def === 'pass') def = 'balanced' }
   return { off, def }
 }
 /** Expected rating swing from your plan against their likely plan, for the matchup preview. */
@@ -403,11 +483,16 @@ const DRIVES = 22
 export const HOME_EDGE = 0.035
 const AWAY_SHARE = 0.6
 /** Home edge for a team playing at home. Your stadium upgrades add to it. */
-export function homeEdge(g: State, homeId: number) {
-  return HOME_EDGE + (homeId === g.user ? facilityLevel(g, 'stadium') * STADIUM_EDGE : 0)
+export function homeEdge(g: State, homeId: number, spotlight = false) {
+  const mine = homeId === g.user ? facilityLevel(g, 'stadium') * STADIUM_EDGE + (fansOf(g) - 50) / 50 * FAN_EDGE : 0
+  return Math.max(0, HOME_EDGE + mine + (spotlight ? SPOTLIGHT_CROWD : 0))
 }
+/** Full stadium (fans 100) adds this to your home edge; an empty one (fans 0) takes it away. */
+const FAN_EDGE = 0.012
+/** Extra home edge when the Spotlight show is in town. */
+const SPOTLIGHT_CROWD = 0.01
 /** The same edge in team-rating points, for the win odds on the matchup card. */
-export const homeEdgeRating = (g: State, homeId: number) => homeEdge(g, homeId) * 65 * (1 + AWAY_SHARE) / 2
+export const homeEdgeRating = (g: State, homeId: number, spotlight = false) => homeEdge(g, homeId, spotlight) * 65 * (1 + AWAY_SHARE) / 2
 /** Conference title games and the national title game are at neutral sites. */
 export const isNeutral = (x: Game) => x.type === 'ccg' || x.type === 'final'
 /** A player for a play, from starters, or backups in the 2nd half when the coach rotates. */
@@ -417,15 +502,17 @@ function onField(team: Team, pos: Pos, q: number, blend: number) {
   return pool.length ? pick(pool) : null
 }
 const nm = (p: Player | null) => p ? p.last : 'a walk-on'
-function playGame(A: Side, B: Side, homeAdv: number, wantLog: boolean) {
+function playGame(A: Side, B: Side, homeAdv: number, wantLog: boolean, weather: Weather = 'clear') {
+  const fx = WEATHER_FX[weather]
+  const wx = (s: Side) => -fx.pass * (1 - RUN_SHARE[s.plan.off])
   const ra = teamRatings(A.team, A.blend), rb = teamRatings(B.team, B.blend)
   const sa = styleRatings(A.team, A.blend), sb = styleRatings(B.team, B.blend)
   const ea = planEdge(sa, A.plan.off, sb, B.plan.def), eb = planEdge(sb, B.plan.off, sa, A.plan.def)
-  const offA = ra.off + A.boost.off + ea.off, defB = rb.def + B.boost.def + ea.def
-  const offB = rb.off + B.boost.off + eb.off, defA = ra.def + A.boost.def + eb.def
+  const offA = ra.off + A.boost.off + ea.off + wx(A), defB = rb.def + B.boost.def + ea.def
+  const offB = rb.off + B.boost.off + eb.off + wx(B), defA = ra.def + A.boost.def + eb.def
   const sides = [
-    { s: A, p: clamp(0.36 + (offA - defB) / 65 + homeAdv, 0.1, 0.72), td: clamp(0.6 + (offA - defB) / 150, 0.35, 0.85), k: ra.k, def: B },
-    { s: B, p: clamp(0.36 + (offB - defA) / 65 - homeAdv * AWAY_SHARE, 0.1, 0.72), td: clamp(0.6 + (offB - defA) / 150, 0.35, 0.85), k: rb.k, def: A },
+    { s: A, p: clamp(0.36 + (offA - defB) / 65 + homeAdv + fx.drive, 0.1, 0.72), td: clamp(0.6 + (offA - defB) / 150, 0.35, 0.85), k: ra.k, def: B },
+    { s: B, p: clamp(0.36 + (offB - defA) / 65 - homeAdv * AWAY_SHARE + fx.drive, 0.1, 0.72), td: clamp(0.6 + (offB - defA) / 150, 0.35, 0.85), k: rb.k, def: A },
   ]
   const score: [number, number] = [0, 0]
   const log: Drive[] = []
@@ -439,7 +526,7 @@ function playGame(A: Side, B: Side, homeAdv: number, wantLog: boolean) {
     const side = (i % 2) as 0 | 1, x = sides[side], q = Math.min(4, Math.floor(i / 5.5) + 1)
     let pts = 0, kind: 'td' | 'fg' | 'miss' | 'stop' = 'stop'
     if (rnd() < x.p) {
-      if (rnd() < x.td) { pts = 7; kind = 'td' } else if (rnd() < 0.55 + x.k / 300) { pts = 3; kind = 'fg' } else kind = 'miss'
+      if (rnd() < x.td) { pts = 7; kind = 'td' } else if (rnd() < 0.55 + x.k / 300 + fx.fg) { pts = 3; kind = 'fg' } else kind = 'miss'
     }
     score[side] += pts
     if (!wantLog) continue
@@ -539,9 +626,10 @@ export function simWeek(g: State) {
   const goalsBefore = (g.ad?.goals ?? []).map(x => goalProgress(g, x).done)
   building = { week: g.week, label: weekName(g.week), rankBefore, rankAfter: rankBefore, lines: [] }
   setSeed(g.seed)
-  if (g.week === 13) addConfChampionships(g)
-  if (g.week === 14) addSemis(g)
-  if (g.week === 15) addFinal(g)
+  // Postseason games are normally scheduled when the week before ends. This catches older saves.
+  scheduleNextRound(g)
+  const spot = spotlightGame(g)
+  if (spot) spot.spotlight = true
   for (const t of g.teams) for (const p of t.roster) if (p.inj) p.inj--
   const games = g.schedule.filter(x => x.week === g.week && !x.played)
   for (const gm of games) {
@@ -554,10 +642,11 @@ export function simWeek(g: State) {
     if (isUser) gm.rotation = g.rotation
     const neutral = gm.type === 'final' || gm.type === 'ccg'
     const big = gm.type === 'ccg' || gm.type === 'semi' || gm.type === 'final'
-    const homeAdv = neutral ? 0 : homeEdge(g, h.id)
+    const homeAdv = neutral ? 0 : homeEdge(g, h.id, !!gm.spotlight)
+    const weather = weatherOf(g, gm)
     const myPlan = g.plan ?? DEFAULT_PLAN
-    const hp = userHome ? myPlan : aiPlan(h, a), ap = userAway ? myPlan : aiPlan(a, h)
-    const res = playGame({ team: h, blend: hb, boost: gameDayBoost(g, h, big), plan: hp }, { team: a, blend: ab, boost: gameDayBoost(g, a, big), plan: ap }, homeAdv, isUser)
+    const hp = userHome ? myPlan : aiPlan(h, a, true, weather), ap = userAway ? myPlan : aiPlan(a, h, true, weather)
+    const res = playGame({ team: h, blend: hb, boost: gameDayBoost(g, h, big), plan: hp }, { team: a, blend: ab, boost: gameDayBoost(g, a, big), plan: ap }, homeAdv, isUser, weather)
     const hs = res.hs, as = res.as
     gm.hs = hs; gm.as = as; gm.played = true
     if (isUser) {
@@ -580,7 +669,23 @@ export function simWeek(g: State) {
       const my = userHome ? hs : as, their = userHome ? as : hs, win = my > their
       const tag = gm.type === 'ccg' ? 'Conference title game: ' : gm.type === 'semi' ? 'Playoff semifinal: ' : gm.type === 'final' ? 'National title game: ' : ''
       g.news.unshift(`Week ${g.week}. ${tag}${win ? 'Beat' : 'Lost to'} ${opp.school} ${my}-${their}.${gm.type === 'final' && win ? ' NATIONAL CHAMPIONS!' : ''}`)
-      building.result = { opp: opp.id, my, their, win, home: userHome, type: gm.type }
+      const oppRanked = (oppRank.get(opp.id) ?? 99) <= TOP_N
+      const fanDelta = fanSwing(win, userHome, oppRanked, !!gm.spotlight, gm.type === 'cupcake', Math.abs(my - their))
+      if (userHome && !neutral) gm.attendance = attendanceFor(g, !!gm.spotlight)
+      g.fans = clamp(fansOf(g) + fanDelta, 0, 100)
+      gm.fanDelta = fanDelta
+      building.result = { opp: opp.id, my, their, win, home: userHome, type: gm.type, spotlight: !!gm.spotlight, fanDelta, attendance: gm.attendance }
+      if (gm.spotlight) {
+        let n = 0
+        for (const r of g.recruits) {
+          if (r.committed !== null) continue
+          if (r.offered) { r.interest = Math.max(0, r.interest + (win ? 6 : -3)); n++ }
+          else if (win && r.interest >= 20) { r.interest += 3; n++ }
+        }
+        log(g, 'spotlight', win
+          ? `Saturday Spotlight: you won on the national stage.${n ? ` ${n} recruit${n > 1 ? 's' : ''} watching got more interested.` : ''}`
+          : `Saturday Spotlight: a loss on the national stage. Your offers cooled off a little.`)
+      }
       ;(userHome ? hurtH : hurtA).forEach(x => log(g, 'injury', x))
       if (big) {
         const d = depth(userHome ? h : a)
@@ -591,12 +696,16 @@ export function simWeek(g: State) {
       const ranked = (oppRank.get(opp.id) ?? 99) <= TOP_N
       for (const r of g.recruits) {
         if (r.visitWeek !== g.week || r.committed !== null) continue
-        const delta = visitSwing(g, win, ranked)
+        const base = visitSwing(g, win, ranked) + (win && userHome ? Math.round((fansOf(g) - 50) / 12) : 0)
+        const delta = gm.spotlight ? Math.round(base * 1.5) : base
         r.interest = Math.max(0, r.interest + delta)
         log(g, 'visit', win
           ? `${r.pos} ${r.first} ${r.last} loved the ${ranked ? 'win over a ranked team' : 'win'} on his visit (+${delta}).`
           : `${r.pos} ${r.first} ${r.last} left his visit after the loss (${delta}).`)
       }
+    } else if (gm.spotlight && !big) {
+      const w = team(g, hs > as ? gm.home : gm.away), l = team(g, hs > as ? gm.away : gm.home)
+      log(g, 'spotlight', `Saturday Spotlight at ${h.school}: ${w.school} beat ${l.school} ${Math.max(hs, as)}-${Math.min(hs, as)}.`)
     } else if (big) {
       const w = team(g, hs > as ? gm.home : gm.away), l = team(g, hs > as ? gm.away : gm.home)
       const what = gm.type === 'ccg' ? `won the ${g.confNames[w.conf]} title` : gm.type === 'semi' ? 'advanced to the national title game' : 'won the national title'
@@ -613,7 +722,8 @@ export function simWeek(g: State) {
   g.points = weeklyPoints(g)
   g.rotation = 0
   // season over?
-  if (g.week > 15 || (g.week === 14 && false)) g.phase = 'offseason'
+  if (g.week > 15) g.phase = 'offseason'
+  else scheduleNextRound(g)
   g.seed = getSeed()
   if (g.phase === 'offseason') openPortal(g)
   building.rankAfter = rankAt(g, lastPlayedWeek(g)).find(r => r.team.id === g.user)!.rank
@@ -625,6 +735,13 @@ export function simWeek(g: State) {
 export function confStandings(g: State, conf: number) {
   return g.teams.filter(t => t.conf === conf).sort((a, b) =>
     (b.cw - b.cl) - (a.cw - a.cl) || (b.w - b.l) - (a.w - a.l) || teamRatings(b).ovr - teamRatings(a).ovr)
+}
+/** Adds the next postseason round once the week before it is done, so you can preview it and set a plan. */
+function scheduleNextRound(g: State) {
+  const has = (type: GameType) => g.schedule.some(x => x.type === type)
+  if (g.week === 13 && !has('ccg')) addConfChampionships(g)
+  if (g.week === 14 && !has('semi')) addSemis(g)
+  if (g.week === 15 && !has('final')) addFinal(g)
 }
 function addConfChampionships(g: State) {
   for (let c = 0; c < 4; c++) {
@@ -693,8 +810,10 @@ export function confRankings(g: State, week = lastPlayedWeek(g)): ConfRow[] {
 function rankAt(g: State, week: number): Omit<RankRow, 'prev'>[] {
   const rec = new Map<number, { w: number; l: number; opps: number[] }>()
   const get = (id: number) => { let r = rec.get(id); if (!r) rec.set(id, (r = { w: 0, l: 0, opps: [] })); return r }
+  const spotWins = new Map<number, number>()
   for (const x of playedThrough(g, week)) {
     const h = get(x.home), a = get(x.away), homeWon = x.hs! > x.as!
+    if (x.spotlight) { const w = homeWon ? x.home : x.away; spotWins.set(w, (spotWins.get(w) ?? 0) + 1) }
     homeWon ? (h.w++, a.l++) : (a.w++, h.l++)
     h.opps.push(x.away); a.opps.push(x.home)
   }
@@ -712,7 +831,8 @@ function rankAt(g: State, week: number): Omit<RankRow, 'prev'>[] {
     // Prestige mapped onto the range a real resume lands in (about 0.3 to 0.75), so scores don't jump after week 1.
     const prior = 0.25 + t.prestige / 20
     const score = (prior * RANK_PRIOR_GAMES + resume * gp) / (RANK_PRIOR_GAMES + gp)
-    return { team: t, rank: 0, score: Math.round(score * 1000) / 10, w: r.w, l: r.l, sos, sosRank: 0, confStrength: cs }
+    const bonus = (spotWins.get(t.id) ?? 0) * SPOTLIGHT_RANK_BONUS
+    return { team: t, rank: 0, score: Math.round(score * 1000) / 10 + bonus, w: r.w, l: r.l, sos, sosRank: 0, confStrength: cs }
   })
   ;[...rows].sort((a, b) => b.sos - a.sos).forEach((r, i) => (r.sosRank = i + 1))
   rows.sort((a, b) => b.score - a.score || b.team.prestige - a.team.prestige)
@@ -1045,6 +1165,10 @@ export function advanceOffseason(g: State) {
   const income = boosterIncome(g, met, myPicks.length)
   g.boosters = Math.round(((g.boosters ?? 0) + income) * 10) / 10
   report.boosters = income
+  // Fans settle toward what the program's prestige earns, and titles fire them up.
+  const fansBefore = fansOf(g)
+  const baseline = 30 + me.prestige * 5
+  g.fans = clamp(Math.round(fansBefore + (baseline - fansBefore) * 0.3 + (me.confChamp ? 5 : 0) + (me.champ ? 10 : 0)), 0, 100)
   resolvePortal(g, report)
   // graduation and progression
   for (const t of g.teams) {
@@ -1174,7 +1298,7 @@ export function visitSwing(g: State, win: boolean, ranked: boolean) {
 /** Booster money from the season just finished, in $M. */
 function boosterIncome(g: State, goalsMet: number, picks: number) {
   const me = g.teams[g.user]
-  const x = 0.5 + me.w * 0.12 + goalsMet * 0.4 + (me.confChamp ? 0.5 : 0) + (me.playoff ? 0.5 : 0) + (me.champ ? 1 : 0) + picks * 0.3
+  const x = 0.5 + me.w * 0.12 + goalsMet * 0.4 + (me.confChamp ? 0.5 : 0) + (me.playoff ? 0.5 : 0) + (me.champ ? 1 : 0) + picks * 0.3 + fansOf(g) / 100 * 0.8
   return Math.round(x * 10) / 10
 }
 

@@ -60,6 +60,10 @@ Plain functions that mutate one `State` object. The UI keeps that object in a Sv
 - **Facilities**: weight room, recruiting lounge, stadium and medical center, levels 0 to 5 (`g.facilities`), paid with booster money (`g.boosters`, from `boosterIncome()` on signing day). The next level costs `facilityCost()`.
 - **Pro draft**: `runDraft()` on signing day takes the top 24 seniors and declaring juniors (`EARLY_OVR`, `EARLY_CHANCE`) league-wide. `g.drafts` keeps the last 6. Your picks in the last 3 drafts add 3% recruiting interest each (`pipelineBoost()`, up to 30%). `draftWatch()` projects your picks.
 - **Conference tiers**: schools start in tiers by conference (`CONF_TIERS`): the Gulf Coast is the power conference (avg prestige about 7), then the Heartland 8 (about 5.5), the Pacific Frontier (about 4) and the Ridge Conference of small schools (about 2.6). Each offseason, prestige moves toward a target that is 70% final national rank and 30% the conference's average (`CONF_PULL`), so the tiers last but a winning small school still climbs.
+- **Weather**: `weatherOf()` gives every game a forecast (clear, rain, wind, snow; title games are indoors) from the home team's region (`CLIMATE`) and the week, with snow from week 9. It's a hash of year, week and teams, so nothing is saved. `WEATHER_FX` cuts passing (more for pass-heavy plans), field goals and, in snow, all scoring. AI coaches stop throwing in wind and snow.
+- **Saturday Spotlight**: `spotlightGame()` picks each week's biggest game, the best-ranked pair, and flags it when played. The winner gets `SPOTLIGHT_RANK_BONUS` in the poll and the home crowd is louder. In your Spotlight games, offered recruits gain or lose interest and game-day visits swing 50% more.
+- **Fan meter**: `g.fans` (0 to 100, `fansOf()`). `fanSwing()` moves it after each of your games: home wins, ranked wins and Spotlight wins count most, and a cupcake loss costs 12. Each offseason it settles 30% toward what prestige earns, and titles add to it. Fans add to your home edge (`FAN_EDGE`), booster money and home visit swings. Home games record attendance (`stadiumSeats()` grows with stadium level).
+- **Postseason scheduling**: conference title games, semifinals and the title game are scheduled when the week before ends (`scheduleNextRound()`), so you can preview them and set a game plan.
 - **Offseason**: `advanceOffseason()` moves prestige toward a target based on results, graduates seniors, develops players, signs recruits, fills empty starter slots with walk-ons and builds the next schedule.
 - **Editing**: `editTeam()`, `renameConf()`, `swapConference()` (only before week 1 is played, rebuilds the schedule).
 - **Settings**: `g.settings` holds recruiting difficulty and injury rate. Older saves without it fall back to `DEFAULT_SETTINGS`.
@@ -78,7 +82,9 @@ All in `game.ts`:
 | Injury rate | `applySnaps()`, `0.014` per full game |
 | Prestige drift | `PRESTIGE_DRIFT`, `CONF_PULL` and the `target` formula in `advanceOffseason()` |
 | Score spread | `playGame()` |
-| Home-field edge | `HOME_EDGE`, `AWAY_SHARE`, `STADIUM_EDGE` |
+| Home-field edge | `HOME_EDGE`, `AWAY_SHARE`, `STADIUM_EDGE`, `FAN_EDGE`, `SPOTLIGHT_CROWD` |
+| Weather | `CLIMATE`, `WEATHER_FX` |
+| Fans | `fanSwing()`, `FAN_EDGE`, the offseason drift in `advanceOffseason()` |
 | Portal entry odds, budget, limits | `PORTAL_ENTER`, `PORTAL_POINTS`, `MAX_TRANSFERS`, `MAX_PORTAL_OFFERS`, `PORTAL_COST` |
 | Playing-time expectations | `expectedShare()` |
 | AD goals and firing | `makeGoals()`, `AD_STRIKES`, `AD_GOALS_TO_PASS`, `AD_PRESTIGE`, `AD_POINTS` |
