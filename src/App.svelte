@@ -32,6 +32,27 @@
     try { localStorage.setItem(THEME_KEY, theme) } catch {}
   })
 
+  // install as an app (PWA)
+  type InstallPrompt = Event & { prompt: () => Promise<void>; userChoice: Promise<{ outcome: string }> }
+  let installEvt = $state<InstallPrompt | null>(null)
+  const standalone = typeof window !== 'undefined' && (matchMedia('(display-mode: standalone)').matches || (navigator as any).standalone === true)
+  let installed = $state(standalone)
+  const isIOS = typeof navigator !== 'undefined' && /iphone|ipad|ipod/i.test(navigator.userAgent)
+  $effect(() => {
+    const onPrompt = (e: Event) => { e.preventDefault(); installEvt = e as InstallPrompt }
+    const onInstalled = () => { installed = true; installEvt = null }
+    window.addEventListener('beforeinstallprompt', onPrompt)
+    window.addEventListener('appinstalled', onInstalled)
+    return () => { window.removeEventListener('beforeinstallprompt', onPrompt); window.removeEventListener('appinstalled', onInstalled) }
+  })
+  async function install() {
+    if (!installEvt) return
+    await installEvt.prompt()
+    const { outcome } = await installEvt.userChoice
+    installEvt = null
+    if (outcome === 'accepted') flash('Installed. Find Pixel Football on your home screen.')
+  }
+
   // team editor
   let editId = $state<number | null>(null)
   let draft = $state({ school: '', mascot: '', abbr: '', color: '#000000' })
@@ -1067,6 +1088,17 @@
                 <button class:on={theme === v} onclick={() => (theme = v as any)}>{l}</button>
               {/each}
             </div>
+            <h4>App</h4>
+            {#if installed}
+              <p class="muted small">You're playing the installed app. It works offline.</p>
+            {:else if installEvt}
+              <button class="btn primary" onclick={install}>Install app</button>
+              <p class="muted small">Adds Pixel Football to your home screen or desktop. It opens in its own window and works offline.</p>
+            {:else if isIOS}
+              <p class="muted small">To install on iPhone or iPad, tap Share in Safari, then Add to Home Screen. It works offline once installed.</p>
+            {:else}
+              <p class="muted small">Your browser can install this as an app from its menu (look for Install or Add to Home Screen). Once it's loaded, it works offline.</p>
+            {/if}
           </section>
           <section class="card">
             <h3>Save</h3>

@@ -13,7 +13,18 @@ pnpm build          # single self-contained dist/index.html
 pnpm check          # svelte-check + tsc
 ```
 
-The build uses `vite-plugin-singlefile`, so `dist/index.html` has all JS and CSS inlined. Drop it anywhere static.
+The build uses `vite-plugin-singlefile`, so `dist/index.html` has all JS and CSS inlined. Upload the whole `dist/` folder to any static host, in any folder (`base: './'` keeps every path relative).
+
+### Installable app (PWA)
+
+`dist/` also holds the files that make it an installable app that works offline:
+
+- `public/manifest.webmanifest`: name, colors and the icons in `public/`.
+- `public/sw.js`: the service worker. It loads the page from the network first, so a new deploy shows up right away, and falls back to the cached copy when offline or after 3 seconds. Icons and Google Fonts are cached on first load. Bump `VERSION` in it after changing the file to clear old caches.
+- `src/main.ts` registers it in production builds served over http(s), and asks for persistent storage so the saved career isn't cleared.
+- Settings has an Install app button when the browser offers one, and Add to Home Screen steps on iPhone.
+
+Service workers need https (or localhost), so the PWA parts don't run from `file://` or under `pnpm dev`. To try it locally: `pnpm build && pnpm preview`.
 
 ## Layout
 
