@@ -122,7 +122,16 @@
   const plan = $derived(g?.plan ?? G.DEFAULT_PLAN)
   const scout = $derived(opp && opp.conf >= 0 ? G.scouting(opp) : null)
   // The game plan is left out on purpose, so picking one is a read on the opponent, not a number to max.
-  const prob = $derived(myR && oppR ? G.winProb(myOvr + (next?.home === g?.user ? 1 : -1), oppOvr) : 0.5)
+  const site = $derived<'home' | 'away' | 'neutral'>(!next || !g ? 'neutral' : G.isNeutral(next) ? 'neutral' : next.home === g.user ? 'home' : 'away')
+  const homeRating = $derived(next && g && site !== 'neutral' ? G.homeEdgeRating(g, next.home) : 0)
+  const prob = $derived(myR && oppR ? G.winProb(myOvr + (site === 'home' ? homeRating : site === 'away' ? -homeRating : 0), oppOvr) : 0.5)
+  const SITE_LABEL = { home: 'Home', away: 'Away', neutral: 'Neutral site' }
+  const siteOf = (gm: Game): 'home' | 'away' | 'neutral' => G.isNeutral(gm) ? 'neutral' : gm.home === g!.user ? 'home' : 'away'
+  const siteCount = $derived.by(() => {
+    const c = { home: 0, away: 0, neutral: 0 }
+    if (g) for (const x of g.schedule) if (x.home === g.user || x.away === g.user) c[siteOf(x)]++
+    return c
+  })
   const OFF_LABEL: Record<Lean, string> = { run: 'Run-heavy', balanced: 'Balanced', pass: 'Pass-heavy' }
   const DEF_LABEL: Record<Lean, string> = { run: 'Stop the run', balanced: 'Balanced', pass: 'Stop the pass' }
   function setPlan(k: 'off' | 'def', v: Lean) { if (g) g.plan = { ...(g.plan ?? G.DEFAULT_PLAN), [k]: v } }
@@ -633,12 +642,13 @@
               <p class="muted">On signing day the portal closes, seniors graduate, players develop and your commits and transfers join the roster.</p>
               <button class="btn primary block" onclick={() => G.advanceOffseason(g!)}>Go to signing day</button>
             {:else if next && opp && myR && oppR}
-              <div class="eyebrow">{weekLabel} · <span class:cupcake={next.type === 'cupcake'}>{typeTag[next.type]}</span> · {next.home === g.user ? 'Home' : 'Away'}</div>
+              <div class="eyebrow">{weekLabel} · <span class:cupcake={next.type === 'cupcake'}>{typeTag[next.type]}</span> · {SITE_LABEL[site]}</div>
               <div class="score">
                 <div class="side">
                   {@render badge(me, 'lg')}
                   <div class="sname"><span class="rk">{rk(me.id)}</span>{me.school}</div>
                   <div class="muted">{me.w}-{me.l}</div>
+                  {#if site !== 'neutral'}<span class="sitetag" class:home={site === 'home'}>{site === 'home' ? 'Home' : 'Away'}</span>{/if}
                 </div>
                 <div class="nums">
                   <b>{Math.round(myOvr)}</b><span>vs</span><b class="them">{Math.round(oppOvr)}</b>
@@ -648,6 +658,7 @@
                   {@render badge(opp, 'lg')}
                   <div class="sname"><span class="rk">{rk(opp.id)}</span>{opp.school}</div>
                   <div class="muted">{opp.conf >= 0 ? `${opp.w}-${opp.l}` : 'Cupcake'}</div>
+                  {#if site !== 'neutral'}<span class="sitetag" class:home={site === 'away'}>{site === 'away' ? 'Home' : 'Away'}</span>{/if}
                 </div>
               </div>
               <div class="prob"><i style="width:{prob * 100}%"></i></div>
@@ -656,6 +667,11 @@
                 {#each ROT as r}<button class:on={g.rotation === r.v} onclick={() => (g!.rotation = r.v)}>{r.name}</button>{/each}
               </div>
               <p class="muted small">{ROT.find(r => r.v === g!.rotation)?.note}</p>
+              <p class="sitenote {site}">
+                {#if site === 'home'}Home game. Your crowd lifts your offense and makes it harder on theirs.{#if g.facilities?.stadium} Your stadium upgrades make it louder.{/if}
+                {:else if site === 'away'}Road game. Their crowd is on their side, so expect a tougher day.
+                {:else}Neutral site. No home crowd for either team.{/if}
+              </p>
               {#if next.type === 'cupcake'}<p class="hint">Cupcake week. Good time to get your bench real snaps.</p>{/if}
               {#if g.rotation > 0 && noBackup.length}<p class="muted small">No backup at {noBackup.join(', ')}, so those starters stay in.</p>{/if}
               {#if scout}
@@ -947,14 +963,15 @@
 
     {:else if tab === 'schedule'}
       <section class="card flush">
-        <div class="cardhead"><h3>{g.year} schedule</h3></div>
+        <div class="cardhead"><h3>{g.year} schedule</h3>
+          <span class="muted small">{siteCount.home} home · {siteCount.away} away{siteCount.neutral ? ` · ${siteCount.neutral} neutral` : ''}</span></div>
         {#each g.schedule.filter(x => x.home === g!.user || x.away === g!.user).sort((a, b) => a.week - b.week) as gm}
           {@const o = oppOf(gm)}
           {@const res = result(gm)}
           {#snippet srowBody()}
             <span class="wk">Wk {gm.week}</span>
             {@render badge(o, 'sm')}
-            <div class="grow"><b>{gm.home === g!.user ? 'vs' : 'at'} <span class="rk">{rk(o.id)}</span>{o.school}</b><div class="muted small">{typeTag[gm.type]}{gm.played && gm.rotation ? (gm.rotation >= 0.5 ? ' · backups played 2nd half' : ' · rotated') : ''}</div></div>
+            <div class="grow"><b>{siteOf(gm) === 'away' ? 'at' : 'vs'} <span class="rk">{rk(o.id)}</span>{o.school}</b><div class="muted small"><span class="sitetag sm" class:home={siteOf(gm) === 'home'}>{SITE_LABEL[siteOf(gm)]}</span> {typeTag[gm.type]}{gm.played && gm.rotation ? (gm.rotation >= 0.5 ? ' · backups played 2nd half' : ' · rotated') : ''}</div></div>
             {#if res}<span class="result" class:w={res.w}>{res.w ? 'W' : 'L'} {res.text}</span>{:else}<span class="muted small">Upcoming</span>{/if}
           {/snippet}
           {#if gm.log}

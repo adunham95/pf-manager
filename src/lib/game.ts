@@ -239,7 +239,53 @@ function makeSchedule(g: State): Game[] {
       arr.splice(1, 0, arr.pop()!)
     }
   }
+  balanceHomeAway(g, games)
   return games
+}
+
+/** Home games each FBS team gets against other FBS teams (cupcakes are always at home on top of this). */
+const FBS_HOME_TARGET = 5
+/**
+ * Conference games flip last season's site (home-and-home), then sites are swapped until every team
+ * has FBS_HOME_TARGET home games against FBS teams, swapping non-conference games before conference ones.
+ * `g.schedule` is still last season's schedule when this runs.
+ */
+function balanceHomeAway(g: State, games: Game[]) {
+  const lastHome = new Map<string, number>()
+  for (const x of g.schedule ?? []) if (x.type === 'conf') lastHome.set([x.home, x.away].sort((a, b) => a - b).join('-'), x.home)
+  const fbs = games.filter(x => x.type === 'conf' || x.type === 'nonconf')
+  for (const x of fbs) {
+    const was = lastHome.get([x.home, x.away].sort((a, b) => a - b).join('-'))
+    if (x.type === 'conf' && was === x.home) [x.home, x.away] = [x.away, x.home]
+  }
+  // Every team plays 10 FBS games, an even number, so an exact 5/5 split always exists.
+  // Fix one surplus at a time by flipping a chain of games from a team with too many home games
+  // to one with too few (everyone in between stays even). Non-conference games go first.
+  const homes = new Map<number, number>()
+  for (const x of fbs) homes.set(x.home, (homes.get(x.home) ?? 0) + 1)
+  const h = (id: number) => homes.get(id) ?? 0
+  const chain = (from: number, edges: Game[]) => {
+    const prev = new Map<number, Game>([[from, null as unknown as Game]])
+    const queue = [from]
+    while (queue.length) {
+      const u = queue.shift()!
+      if (u !== from && h(u) < FBS_HOME_TARGET) {
+        const path: Game[] = []
+        for (let v = u; v !== from; v = prev.get(v)!.home) path.push(prev.get(v)!)
+        return path
+      }
+      for (const x of edges) if (x.home === u && !prev.has(x.away)) { prev.set(x.away, x); queue.push(x.away) }
+    }
+    return null
+  }
+  const nonconf = fbs.filter(x => x.type === 'nonconf')
+  for (let guard = 0; guard < 200; guard++) {
+    const heavy = shuffle(g.teams.map(t => t.id)).find(id => h(id) > FBS_HOME_TARGET)
+    if (heavy === undefined) break
+    const path = chain(heavy, nonconf) ?? chain(heavy, fbs)
+    if (!path) break
+    for (const x of path) { homes.set(x.home, h(x.home) - 1); homes.set(x.away, h(x.away) + 1); [x.home, x.away] = [x.away, x.home] }
+  }
 }
 
 function starRoll() { const r = rnd(); return r < 0.04 ? 5 : r < 0.18 ? 4 : r < 0.53 ? 3 : r < 0.83 ? 2 : 1 }
@@ -353,6 +399,17 @@ export interface Drive { q: number; side: 0 | 1; text: string; pts: number; scor
 type Boost = { off: number; def: number }
 interface Side { team: Team; blend: number; boost: Boost; plan: Plan }
 const DRIVES = 22
+/** Home crowd: added to the home offense's drive success, and AWAY_SHARE of it taken from the visitors'. */
+export const HOME_EDGE = 0.035
+const AWAY_SHARE = 0.6
+/** Home edge for a team playing at home. Your stadium upgrades add to it. */
+export function homeEdge(g: State, homeId: number) {
+  return HOME_EDGE + (homeId === g.user ? facilityLevel(g, 'stadium') * STADIUM_EDGE : 0)
+}
+/** The same edge in team-rating points, for the win odds on the matchup card. */
+export const homeEdgeRating = (g: State, homeId: number) => homeEdge(g, homeId) * 65 * (1 + AWAY_SHARE) / 2
+/** Conference title games and the national title game are at neutral sites. */
+export const isNeutral = (x: Game) => x.type === 'ccg' || x.type === 'final'
 /** A player for a play, from starters, or backups in the 2nd half when the coach rotates. */
 function onField(team: Team, pos: Pos, q: number, blend: number) {
   const d = depth(team)[pos]
@@ -368,7 +425,7 @@ function playGame(A: Side, B: Side, homeAdv: number, wantLog: boolean) {
   const offB = rb.off + B.boost.off + eb.off, defA = ra.def + A.boost.def + eb.def
   const sides = [
     { s: A, p: clamp(0.36 + (offA - defB) / 65 + homeAdv, 0.1, 0.72), td: clamp(0.6 + (offA - defB) / 150, 0.35, 0.85), k: ra.k, def: B },
-    { s: B, p: clamp(0.36 + (offB - defA) / 65, 0.1, 0.72), td: clamp(0.6 + (offB - defA) / 150, 0.35, 0.85), k: rb.k, def: A },
+    { s: B, p: clamp(0.36 + (offB - defA) / 65 - homeAdv * AWAY_SHARE, 0.1, 0.72), td: clamp(0.6 + (offB - defA) / 150, 0.35, 0.85), k: rb.k, def: A },
   ]
   const score: [number, number] = [0, 0]
   const log: Drive[] = []
@@ -497,7 +554,7 @@ export function simWeek(g: State) {
     if (isUser) gm.rotation = g.rotation
     const neutral = gm.type === 'final' || gm.type === 'ccg'
     const big = gm.type === 'ccg' || gm.type === 'semi' || gm.type === 'final'
-    const homeAdv = neutral ? 0 : 0.03 + (userHome ? facilityLevel(g, 'stadium') * STADIUM_EDGE : 0)
+    const homeAdv = neutral ? 0 : homeEdge(g, h.id)
     const myPlan = g.plan ?? DEFAULT_PLAN
     const hp = userHome ? myPlan : aiPlan(h, a), ap = userAway ? myPlan : aiPlan(a, h)
     const res = playGame({ team: h, blend: hb, boost: gameDayBoost(g, h, big), plan: hp }, { team: a, blend: ab, boost: gameDayBoost(g, a, big), plan: ap }, homeAdv, isUser)
