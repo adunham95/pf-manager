@@ -645,7 +645,15 @@ export function scouting(t: Team) {
 }
 
 // ---------- Game sim (drive by drive) ----------
-export interface Drive { q: number; side: 0 | 1; text: string; pts: number; score: [number, number] }
+export type DriveEnd = 'td' | 'fg' | 'miss' | 'punt' | 'turnover' | 'downs'
+/**
+ * One possession. Field spots are yards from the offense's own goal line (0 to 100),
+ * which is what the gamecast draws.
+ */
+export interface Drive {
+  q: number; side: 0 | 1; text: string; pts: number; score: [number, number]
+  start: number; end: number; plays: number; result: DriveEnd
+}
 type Boost = { off: number; def: number }
 interface Side { team: Team; blend: number; boost: Boost; plan: Plan }
 const DRIVES = 22
@@ -712,28 +720,39 @@ function playGame(A: Side, B: Side, homeAdv: number, wantLog: boolean, weather: 
     const rusher = rr < 0.15 ? qb : rr < 0.25 ? onField(od, 'WR', q, bl) : onField(od, 'RB', q, bl)
     const rec = onField(od, rnd() < 0.7 ? 'WR' : 'TE', q, bl)
     const yards = kind === 'td' ? ri(45, 85) : kind === 'fg' ? ri(30, 60) : kind === 'miss' ? ri(25, 55) : ri(0, 40)
+    // Where the drive started and stopped, for the gamecast. Kicks happen from where the drive stalled.
+    let start = kind === 'td' ? 100 - yards : ri(15, 35)
+    let end = kind === 'td' ? 100 : kind === 'fg' ? clamp(start + yards, 65, 97) : kind === 'miss' ? clamp(start + yards, 61, 80) : clamp(start + yards, start, 75)
+    if (kind === 'fg' || kind === 'miss') start = Math.min(start, end - 10)
+    const gained = end - start
+    const plays = gained < 10 ? 3 : clamp(Math.round(gained / 7) + ri(1, 3), 4, 14)
+    let result: DriveEnd = kind === 'td' ? 'td' : kind === 'fg' ? 'fg' : kind === 'miss' ? 'miss' : 'punt'
     // About 60% of yards come through the air with a balanced plan.
     const passYds = clamp(Math.round(yards * (1 - rs) * 1.25 * (0.6 + rnd() * 0.8)), 0, yards)
     if (passYds) { st(qb) && (st(qb)!.passYds += passYds); st(rec) && (st(rec)!.recYds += passYds) }
     if (yards - passYds) st(rusher) && (st(rusher)!.rushYds += yards - passYds)
     let text = ''
     if (kind === 'td') {
-      if (run) { text = `${ri(1, 45)}-yd TD run by ${nm(rusher)}`; give(rusher, 'td'); st(rusher) && st(rusher)!.rushTd++ }
-      else { text = `${nm(qb)} ${ri(4, 75)}-yd TD pass to ${nm(rec)}`; give(qb, 'pass'); give(rec, 'td'); st(qb) && st(qb)!.passTd++; st(rec) && st(rec)!.recTd++ }
+      if (run) { text = `${Math.min(gained, ri(1, 45))}-yd TD run by ${nm(rusher)}`; give(rusher, 'td'); st(rusher) && st(rusher)!.rushTd++ }
+      else { text = `${nm(qb)} ${Math.min(gained, ri(4, 75))}-yd TD pass to ${nm(rec)}`; give(qb, 'pass'); give(rec, 'td'); st(qb) && st(qb)!.passTd++; st(rec) && st(rec)!.recTd++ }
     } else if (kind === 'fg') {
-      const k = onField(od, 'K', q, bl); text = `${nm(k)} ${ri(22, 52)}-yd field goal`; give(k, 'fg'); st(k) && st(k)!.fg++
+      const k = onField(od, 'K', q, bl); text = `${nm(k)} ${117 - end}-yd field goal`; give(k, 'fg'); st(k) && st(k)!.fg++
     } else if (kind === 'miss') {
-      text = `${nm(onField(od, 'K', q, bl))} missed a ${ri(38, 56)}-yd field goal`
+      text = `${nm(onField(od, 'K', q, bl))} missed a ${117 - end}-yd field goal`
     } else {
       const r = rnd()
       if (r < 0.2) {
+        result = 'turnover'
         if (!run) { const db = onField(ddf, 'DB', q, dbl); text = `${nm(qb)} intercepted by ${nm(db)}`; give(db, 'turn'); st(db) && st(db)!.tkw++; st(qb) && st(qb)!.int++ }
         else { const lb = onField(ddf, rnd() < 0.6 ? 'LB' : 'DL', q, dbl); text = `${nm(rusher)} fumbled, recovered by ${nm(lb)}`; give(lb, 'turn'); st(lb) && st(lb)!.tkw++ }
       } else if (r < 0.42) {
         const dl = onField(ddf, rnd() < 0.7 ? 'DL' : 'LB', q, dbl); text = `Sacked by ${nm(dl)} on third down. Punt`; give(dl, 'sack'); st(dl) && st(dl)!.sacks++
-      } else text = pick(['Three and out. Punt', 'Stalled near midfield. Punt', 'Drive stalls. Punt', 'Turned over on downs'])
+      } else {
+        text = gained < 10 ? 'Three and out. Punt' : end >= 45 && end <= 60 ? pick(['Stalled near midfield. Punt', 'Turned over on downs']) : pick(['Drive stalls. Punt', 'Turned over on downs'])
+        if (text === 'Turned over on downs') result = 'downs'
+      }
     }
-    if (wantLog) log.push({ q, side, text, pts, score: [score[0], score[1]] })
+    if (wantLog) log.push({ q, side, text, pts, score: [score[0], score[1]], start, end, plays, result })
   }
   const edge = (ra.ovr + (A.boost.off + A.boost.def) / 2) - (rb.ovr + (B.boost.off + B.boost.def) / 2)
   while (score[0] === score[1]) {
@@ -742,7 +761,11 @@ function playGame(A: Side, B: Side, homeAdv: number, wantLog: boolean, weather: 
     const od = dd[side]
     const who = pts === 7 ? onField(od, rnd() < 0.5 ? 'RB' : 'WR', 4, 0) : onField(od, 'K', 4, 0)
     if (pts === 7) { st(who) && (who!.pos === 'RB' ? st(who)!.rushTd++ : st(who)!.recTd++) } else st(who) && st(who)!.fg++
-    if (wantLog) log.push({ q: 5, side: side as 0 | 1, text: pts === 7 ? `Overtime TD by ${nm(who)}` : `Overtime field goal by ${nm(who)}`, pts, score: [score[0], score[1]] })
+    if (wantLog) {
+      const end = pts === 7 ? 100 : ri(80, 92)
+      log.push({ q: 5, side: side as 0 | 1, text: pts === 7 ? `Overtime TD by ${nm(who)}` : `Overtime ${117 - end}-yd field goal by ${nm(who)}`, pts, score: [score[0], score[1]],
+        start: 75, end, plays: ri(3, 7), result: pts === 7 ? 'td' : 'fg' })
+    }
   }
   return { hs: score[0], as: score[1], log, credit }
 }

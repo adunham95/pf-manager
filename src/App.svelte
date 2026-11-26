@@ -3,6 +3,7 @@
   import { slide } from 'svelte/transition'
   import { cubicOut } from 'svelte/easing'
   import { SAVE_KEY } from './lib/reset'
+  import Gamecast from './Gamecast.svelte'
   import type { State, Recruit, Pos, Player, Game, PortalEntry, Lean } from './lib/game'
 
   const KEY = SAVE_KEY
@@ -357,6 +358,15 @@
   const gainStr = (r: Recruit, a: 'contact' | 'visit') => `about +${Math.round(G.expectedGain(g!, r, a))}`
 
   function sim() { if (!g) return; swapFrom = null; G.simWeek(g); if (g.phase === 'offseason') tab = 'team' }
+  // Gamecast: sim the week as usual, then replay your game's drives before the recap shows.
+  let watching = $state<{ game: Game; label: string } | null>(null)
+  function watchGame() {
+    if (!g) return
+    const wk = g.week, label = `${weekLabel} · ${next ? typeTag[next.type] : ''}`, user = g.user
+    sim()
+    const gm = g.schedule.find(x => x.week === wk && x.played && (x.home === user || x.away === user))
+    if (gm?.log?.length) watching = { game: gm, label }
+  }
   function act(r: Recruit, a: 'contact' | 'scout' | 'visit' | 'offer') { if (g) flash(G.recruitAction(g, r, a)) }
   function doSwap(starterId: number) { if (g && swapFrom !== null) { G.swapLineup(g, swapFrom, starterId); swapFrom = null } }
   function release(id: number) {
@@ -875,7 +885,10 @@
                   <p class="muted small">Lean into what your team does well and where they're weak, and set your defense for what you think they'll call. Coaches mix it up, so it's never certain.</p>
                 </div>
               {/if}
-              <button class="btn primary block" onclick={sim}>Play week {g.week}</button>
+              <div class="two playrow">
+                <button class="btn block" onclick={watchGame}>📺 Watch it live</button>
+                <button class="btn primary block" onclick={sim}>Play week {g.week}</button>
+              </div>
             {:else}
               <div class="eyebrow">{weekLabel}</div>
               <h2>No game for you this week</h2>
@@ -1447,7 +1460,10 @@
     {/if}
   </main>
 
-  {#if g.signing}
+  {#if watching}
+    <Gamecast game={watching.game} home={G.team(g, watching.game.home)} away={G.team(g, watching.game.away)} user={g.user} label={watching.label}
+      onDone={() => (watching = null)} />
+  {:else if g.signing}
     {@const sd = g.signing}
     {@const done = sd.shown >= sd.picks.length}
     <div class="modal" role="dialog" aria-modal="true" aria-label="National Signing Day">
