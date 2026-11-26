@@ -1124,7 +1124,7 @@
               <span class="pips">{#each Array(G.AD_STRIKES) as _, i}<i class:on={i < ad.strikes}></i>{/each}</span>
               <span class="small">{ad.strikes === 0 ? 'Safe' : ad.strikes === G.AD_STRIKES - 1 ? 'One more bad season and you are fired' : `${ad.strikes} strike${ad.strikes > 1 ? 's' : ''}`}</span>
             </div>
-            <p class="muted small">Each goal met adds {G.AD_PRESTIGE} prestige and {G.AD_POINTS} recruiting points a week next season{ad.bonus ? ` (this season: +${ad.bonus})` : ''}. Meet fewer than {G.AD_GOALS_TO_PASS} and you get a strike. {G.AD_STRIKES} strikes in a row and you're fired.</p>
+            <p class="muted small">Each goal met adds {G.AD_PRESTIGE} prestige and {G.AD_POINTS} recruiting points a week next season{ad.bonus ? ` (this season: +${ad.bonus})` : ''}. Meet fewer than {G.AD_GOALS_TO_PASS} and you get a strike, unless you make the playoff. {G.AD_STRIKES} strikes in a row and you're fired.</p>
           </section>
 
           <section class="card">

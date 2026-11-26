@@ -1608,10 +1608,12 @@ export function advanceOffseason(g: State) {
   }
   me.prestige = clamp(Math.round((me.prestige + met * AD_PRESTIGE) * 10) / 10, 1, 10)
   report.prestigeAfter = me.prestige
-  ad.strikes = met >= AD_GOALS_TO_PASS ? 0 : ad.strikes + 1
+  // A playoff trip always keeps the AD happy, whatever the goals said.
+  const playoffPass = !!me.playoff && met < AD_GOALS_TO_PASS
+  ad.strikes = met >= AD_GOALS_TO_PASS || me.playoff ? 0 : ad.strikes + 1
   ad.bonus = met * AD_POINTS
   const fired = ad.strikes >= AD_STRIKES
-  report.ad = { met, total: results.length, strikes: ad.strikes, fired, lines: results.map(r => `${r.done ? 'Met' : 'Missed'}: ${r.x.text}`) }
+  report.ad = { met, total: results.length, strikes: ad.strikes, fired, lines: [...results.map(r => `${r.done ? 'Met' : 'Missed'}: ${r.x.text}`), ...(playoffPass ? ['You made the playoff, so the AD is happy anyway.'] : [])] }
   const draft = runDraft(g)
   const myPicks = draft.picks.filter(x => x.team === g.user)
   report.drafted = myPicks.map(x => `#${x.pick} (round ${x.round}) ${x.pos} ${x.name} (${x.ovr})${x.early ? ', left early' : ''}`)
@@ -1746,7 +1748,7 @@ export function helmetRace(g: State) {
     for (const p of t.roster) {
       const s = p.stats
       if (!s || !s.g) continue
-      const prod = s.passYds / 19 + s.passTd * 4.5 - s.int * 3 + s.rushYds / 9.5 + s.rushTd * 6 + s.recYds / 8.5 + s.recTd * 6 + s.sacks * 5 + s.tkw * 6
+      const prod = s.passYds / 19 + s.passTd * 4.5 - s.int * 3 + s.rushYds / 9.5 + s.rushTd * 6 + s.recYds / 7 + s.recTd * 7 + s.sacks * 5 + s.tkw * 6
       if (prod <= 0) continue
       out.push({ p, team: t, score: prod * (0.6 + pct * 0.8) + (rank <= 10 ? 15 : 0) })
     }
@@ -1862,14 +1864,20 @@ export const AD_PRESTIGE = 0.15
 export const AD_POINTS = 10
 function makeGoals(g: State): Goal[] {
   const me = g.teams[g.user], pr = me.prestige, conf = g.confNames[me.conf]
-  const wins = clamp(Math.round(1 + pr * 0.8), 3, 9)
+  const wins = clamp(Math.round(1 + pr * 0.8), 3, 8)
   const recruits = clamp(Math.round(pr / 2.5), 1, 4)
   const goals: Goal[] = [{ kind: 'wins', target: wins, text: `Win ${wins} regular-season games` }]
-  const rankTarget = pr >= 9 ? 5 : pr >= 7.5 ? 10 : pr >= 6 ? 15 : pr >= 5 ? 20 : 0
+  const rankTarget = pr >= 9 ? 8 : pr >= 7.5 ? 12 : pr >= 6 ? 15 : pr >= 5 ? 20 : 0
   if (rankTarget) goals.push({ kind: 'rank', target: rankTarget, text: `Finish in the top ${rankTarget}` })
   else { const cw = pr >= 3.5 ? 4 : pr >= 2 ? 3 : 2; goals.push({ kind: 'confWins', target: cw, text: `Win ${cw} ${conf} games` }) }
-  if (pr >= 9) goals.push({ kind: 'conf', target: 1, text: `Win the ${conf}` })
-  else if (pr >= 7) goals.push({ kind: 'conf', target: 2, text: `Reach the ${conf} title game` })
+  // The conference goal matches where your program ranks in its own conference, so a good team in a loaded
+  // conference isn't asked to beat everyone.
+  const expected = 1 + g.teams.filter(t => t.conf === me.conf && t.id !== me.id && t.prestige > pr).length
+  // One place of slack: conferences are close, and a bad bounce shouldn't count as a failed season.
+  const place = Math.max(2, expected + 1)
+  if (pr >= 9.8 && expected === 1) goals.push({ kind: 'conf', target: 1, text: `Win the ${conf}` })
+  else if (pr >= 7 && place === 2) goals.push({ kind: 'conf', target: 2, text: `Reach the ${conf} title game` })
+  else if (pr >= 7) goals.push({ kind: 'conf', target: place, text: `Finish in the top ${place} of the ${conf}` })
   else goals.push({ kind: 'recruits', target: recruits, text: `Sign ${recruits} recruit${recruits > 1 ? 's' : ''} rated 3★ or better` })
   return goals
 }
