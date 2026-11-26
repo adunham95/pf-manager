@@ -18,6 +18,8 @@ export type GameType = 'cupcake' | 'nonconf' | 'conf' | 'ccg' | 'semi' | 'final'
 export interface Game {
   week: number; home: number; away: number; type: GameType
   hs?: number; as?: number; played: boolean; rotation?: number
+  /** Only for your games: the drive log, both game plans and the player of the game. */
+  log?: Drive[]; plan?: Plan; oppPlan?: Plan; potg?: string
 }
 export interface Recruit {
   id: number; first: string; last: string; pos: Pos; stars: number
@@ -32,6 +34,7 @@ export interface SeasonReport {
   graduated: string[]; signed: string[]; cut: string[]; walkOns: number; bigJumps: string[]
   transfersIn?: string[]; transfersOut?: string[]
   ad?: { met: number; total: number; strikes: number; fired: boolean; lines: string[] }
+  drafted?: string[]; boosters?: number
 }
 export interface PortalEntry {
   /** A copy of the player when he entered. The real one stays on his old roster until signing day. */
@@ -52,7 +55,7 @@ export interface State {
   year: number; week: number; phase: 'season' | 'offseason'
   user: number; teams: Team[]; cupcakes: Team[]; confNames: string[]
   schedule: Game[]; recruits: Recruit[]; points: number; focus: number[]
-  rotation: number; news: string[]; history: { year: number; record: string; finish: string; prestige: number }[]
+  rotation: number; plan?: Plan; news: string[]; history: { year: number; record: string; finish: string; prestige: number }[]
   champion: number | null; report: SeasonReport | null
   portal?: Portal | null
   recap?: Recap | null
@@ -60,6 +63,10 @@ export interface State {
   ad?: AD
   /** Set when the AD fires you: schools offering you a job. */
   fired?: { offers: number[] } | null
+  facilities?: Partial<Record<Facility, number>>
+  /** Booster money in $M, spent on facilities. */
+  boosters?: number
+  drafts?: DraftClass[]
 }
 
 // ---------- Traits ----------
@@ -197,6 +204,7 @@ export function newGame(userIndex: number, seed = Date.now()): State {
   g.staff = (['assistant', 'oc', 'dc'] as Role[]).map(r => makeCoach(g, r, 1))
   g.staffMarket = makeMarket(g)
   g.ad = { goals: makeGoals(g), strikes: 0, bonus: 0 }
+  g.facilities = {}; g.boosters = STARTING_BOOSTERS
   g.news.unshift(`Welcome to ${g.teams[userIndex].school}. Your first season kicks off with a cupcake game.`)
   g.seed = getSeed()
   return g
@@ -280,28 +288,156 @@ export function teamRatings(team: Team, blend = 0) {
 }
 
 // ---------- Simulation ----------
-function simScore(off: number, def: number, k: number, homeAdv: number) {
-  let pts = 0
-  const p = clamp(0.36 + (off - def) / 65 + homeAdv, 0.1, 0.72)
-  for (let d = 0; d < 11; d++) {
-    if (rnd() < p) {
-      if (rnd() < clamp(0.6 + (off - def) / 150, 0.35, 0.85)) pts += 7
-      else if (rnd() < 0.55 + k / 300) pts += 3
+// ---------- Game plan ----------
+export type Lean = 'run' | 'balanced' | 'pass'
+export const LEANS: Lean[] = ['run', 'balanced', 'pass']
+/** off: how your offense leans. def: what your defense sells out to stop. */
+export interface Plan { off: Lean; def: Lean }
+export const DEFAULT_PLAN: Plan = { off: 'balanced', def: 'balanced' }
+const RUN_SHARE: Record<Lean, number> = { run: 0.7, balanced: 0.5, pass: 0.3 }
+/** How much the game plan matters. 1.5 puts smart plans about 5 win% above balanced. */
+const PLAN_WEIGHT = 1.5
+export function styleRatings(team: Team, blend = 0) {
+  const d = depth(team)
+  const R = (p: Pos) => groupRating(d, p, blend)
+  return {
+    runOff: R('RB') * 0.5 + R('QB') * 0.25 + R('TE') * 0.25,
+    passOff: R('QB') * 0.5 + R('WR') * 0.4 + R('TE') * 0.1,
+    runDef: R('DL') * 0.55 + R('LB') * 0.45,
+    passDef: R('DB') * 0.6 + R('LB') * 0.2 + R('DL') * 0.2,
+  }
+}
+type Style = ReturnType<typeof styleRatings>
+/**
+ * One side attacking. `off` is the attack's edge from leaning into its strengths and the defense's weak spot.
+ * `def` is the defense's edge from guessing the lean: +3 for a right guess, -3 for the opposite one.
+ */
+export function planEdge(o: Style, offLean: Lean, d: Style, defLean: Lean) {
+  const rs = RUN_SHARE[offLean]
+  const off = (rs - 0.5) * ((o.runOff - d.runDef) - (o.passOff - d.passDef)) * PLAN_WEIGHT
+  const def = (2 - 10 * Math.abs(rs - RUN_SHARE[defLean])) * PLAN_WEIGHT
+  return { off, def }
+}
+/** What a coach would call against this opponent. With `rng`, a quarter of offenses and a third of defenses mix it up. */
+export function aiPlan(t: Team, opp: Team, rng = true): Plan {
+  if (t.conf < 0) return { ...DEFAULT_PLAN }
+  const me = styleRatings(t), them = styleRatings(opp)
+  const lean = (x: number): Lean => x > 3 ? 'run' : x < -3 ? 'pass' : 'balanced'
+  let off = lean((me.runOff - them.runDef) - (me.passOff - them.passDef))
+  let def = lean((them.runOff - me.runDef) - (them.passOff - me.passDef))
+  if (rng) { if (rnd() < 0.25) off = pick(LEANS); if (rnd() < 0.35) def = pick(LEANS) }
+  return { off, def }
+}
+/** Expected rating swing from your plan against their likely plan, for the matchup preview. */
+export function planPreview(me: Team, opp: Team, plan: Plan, blend = 0) {
+  const theirs = aiPlan(opp, me, false)
+  const sm = styleRatings(me, blend), so = styleRatings(opp)
+  const mine = planEdge(sm, plan.off, so, theirs.def), them = planEdge(so, theirs.off, sm, plan.def)
+  return { theirs, offense: mine.off - mine.def, defense: them.def - them.off, net: (mine.off - mine.def + them.def - them.off) / 2 }
+}
+/** Plain-English scouting lines on an opponent. */
+export function scouting(t: Team) {
+  const s = styleRatings(t)
+  const o = s.runOff - s.passOff, d = s.runDef - s.passDef
+  return {
+    ...s,
+    offense: Math.abs(o) < 3 ? 'Balanced offense' : o > 0 ? 'Better at running the ball' : 'Better through the air',
+    defense: Math.abs(d) < 3 ? 'No clear weak spot on defense' : d > 0 ? 'Weak against the pass' : 'Weak against the run',
+  }
+}
+
+// ---------- Game sim (drive by drive) ----------
+export interface Drive { q: number; side: 0 | 1; text: string; pts: number; score: [number, number] }
+type Boost = { off: number; def: number }
+interface Side { team: Team; blend: number; boost: Boost; plan: Plan }
+const DRIVES = 22
+/** A player for a play, from starters, or backups in the 2nd half when the coach rotates. */
+function onField(team: Team, pos: Pos, q: number, blend: number) {
+  const d = depth(team)[pos]
+  const pool = (blend >= 0.5 && q >= 3) || (blend > 0 && rnd() < blend) ? (d.backups.length ? d.backups : d.starters) : d.starters
+  return pool.length ? pick(pool) : null
+}
+const nm = (p: Player | null) => p ? p.last : 'a walk-on'
+function playGame(A: Side, B: Side, homeAdv: number, wantLog: boolean) {
+  const ra = teamRatings(A.team, A.blend), rb = teamRatings(B.team, B.blend)
+  const sa = styleRatings(A.team, A.blend), sb = styleRatings(B.team, B.blend)
+  const ea = planEdge(sa, A.plan.off, sb, B.plan.def), eb = planEdge(sb, B.plan.off, sa, A.plan.def)
+  const offA = ra.off + A.boost.off + ea.off, defB = rb.def + B.boost.def + ea.def
+  const offB = rb.off + B.boost.off + eb.off, defA = ra.def + A.boost.def + eb.def
+  const sides = [
+    { s: A, p: clamp(0.36 + (offA - defB) / 65 + homeAdv, 0.1, 0.72), td: clamp(0.6 + (offA - defB) / 150, 0.35, 0.85), k: ra.k, def: B },
+    { s: B, p: clamp(0.36 + (offB - defA) / 65, 0.1, 0.72), td: clamp(0.6 + (offB - defA) / 150, 0.35, 0.85), k: rb.k, def: A },
+  ]
+  const score: [number, number] = [0, 0]
+  const log: Drive[] = []
+  const credit = new Map<Player, { td: number; pass: number; turn: number; sack: number; fg: number }>()
+  const give = (pl: Player | null, k: 'td' | 'pass' | 'turn' | 'sack' | 'fg') => {
+    if (!pl) return
+    const c = credit.get(pl) ?? { td: 0, pass: 0, turn: 0, sack: 0, fg: 0 }
+    c[k]++; credit.set(pl, c)
+  }
+  for (let i = 0; i < DRIVES; i++) {
+    const side = (i % 2) as 0 | 1, x = sides[side], q = Math.min(4, Math.floor(i / 5.5) + 1)
+    let pts = 0, kind: 'td' | 'fg' | 'miss' | 'stop' = 'stop'
+    if (rnd() < x.p) {
+      if (rnd() < x.td) { pts = 7; kind = 'td' } else if (rnd() < 0.55 + x.k / 300) { pts = 3; kind = 'fg' } else kind = 'miss'
+    }
+    score[side] += pts
+    if (!wantLog) continue
+    const t = x.s.team, dt = x.def.team, bl = x.s.blend, dbl = x.def.blend
+    const run = rnd() < RUN_SHARE[x.s.plan.off]
+    let text = ''
+    if (kind === 'td') {
+      if (run) {
+        const r = rnd() < 0.15 ? onField(t, 'QB', q, bl) : onField(t, 'RB', q, bl)
+        text = `${ri(1, 45)}-yd TD run by ${nm(r)}`; give(r, 'td')
+      } else {
+        const qb = onField(t, 'QB', q, bl), rc = onField(t, rnd() < 0.8 ? 'WR' : 'TE', q, bl)
+        text = `${nm(qb)} ${ri(4, 75)}-yd TD pass to ${nm(rc)}`; give(qb, 'pass'); give(rc, 'td')
+      }
+    } else if (kind === 'fg') {
+      const k = onField(t, 'K', q, bl); text = `${nm(k)} ${ri(22, 52)}-yd field goal`; give(k, 'fg')
+    } else if (kind === 'miss') {
+      text = `${nm(onField(t, 'K', q, bl))} missed a ${ri(38, 56)}-yd field goal`
+    } else {
+      const r = rnd()
+      if (r < 0.2) {
+        if (!run) { const db = onField(dt, 'DB', q, dbl); text = `${nm(onField(t, 'QB', q, bl))} intercepted by ${nm(db)}`; give(db, 'turn') }
+        else { const lb = onField(dt, rnd() < 0.6 ? 'LB' : 'DL', q, dbl); text = `${nm(onField(t, 'RB', q, bl))} fumbled, recovered by ${nm(lb)}`; give(lb, 'turn') }
+      } else if (r < 0.42) {
+        const dl = onField(dt, rnd() < 0.7 ? 'DL' : 'LB', q, dbl); text = `Sacked by ${nm(dl)} on third down. Punt`; give(dl, 'sack')
+      } else text = pick(['Three and out. Punt', 'Stalled near midfield. Punt', 'Drive stalls. Punt', 'Turned over on downs'])
+    }
+    log.push({ q, side, text, pts, score: [score[0], score[1]] })
+  }
+  const edge = (ra.ovr + (A.boost.off + A.boost.def) / 2) - (rb.ovr + (B.boost.off + B.boost.def) / 2)
+  while (score[0] === score[1]) {
+    const side = rnd() < 0.5 + edge / 60 ? 0 : 1, pts = pick([3, 7])
+    score[side] += pts
+    if (wantLog) {
+      const t = sides[side].s.team
+      const text = pts === 7 ? `Overtime TD by ${nm(onField(t, rnd() < 0.5 ? 'RB' : 'WR', 4, 0))}` : `Overtime field goal by ${nm(onField(t, 'K', 4, 0))}`
+      log.push({ q: 5, side: side as 0 | 1, text, pts, score: [score[0], score[1]] })
     }
   }
-  return pts
+  return { hs: score[0], as: score[1], log, credit }
 }
-type Boost = { off: number; def: number }
-function playGame(a: Team, b: Team, ab: number, bb: number, homeAdv = 0.03, ba: Boost = { off: 0, def: 0 }, bbst: Boost = { off: 0, def: 0 }) {
-  const ra = teamRatings(a, ab), rb = teamRatings(b, bb)
-  ra.off += ba.off; ra.def += ba.def; ra.ovr += (ba.off + ba.def) / 2
-  rb.off += bbst.off; rb.def += bbst.def; rb.ovr += (bbst.off + bbst.def) / 2
-  let as = simScore(ra.off, rb.def, ra.k, homeAdv), bs = simScore(rb.off, ra.def, rb.k, 0)
-  while (as === bs) { if (rnd() < 0.5 + (ra.ovr - rb.ovr) / 60) as += pick([3, 7]); else bs += pick([3, 7]) }
-  return [as, bs]
+/** Best player of a side by touchdowns, turnovers forced, sacks and kicks. */
+function playerOfGame(team: Team, credit: ReturnType<typeof playGame>['credit']) {
+  let best: Player | null = null, top = 0, line = ''
+  for (const [pl, c] of credit) {
+    if (!team.roster.includes(pl)) continue
+    const v = c.td * 6 + c.pass * 4 + c.turn * 5 + c.sack * 2 + c.fg * 2
+    if (v <= top) continue
+    top = v; best = pl
+    const bits = [c.pass && `${c.pass} TD pass${c.pass > 1 ? 'es' : ''}`, c.td && `${c.td} TD${c.td > 1 ? 's' : ''}`,
+      c.turn && `${c.turn} takeaway${c.turn > 1 ? 's' : ''}`, c.sack && `${c.sack} sack${c.sack > 1 ? 's' : ''}`, c.fg && `${c.fg} FG`].filter(Boolean)
+    line = bits.join(', ')
+  }
+  return best ? `${best.pos} ${best.first} ${best.last}: ${line}` : undefined
 }
 const BLEND_GROWTH = [0, 0.25, 0.6]
-function applySnaps(team: Team, blend: number, isUser: boolean, focus: number[], injMult = 1, devMult: (p: Player) => number = () => 1): string[] {
+function applySnaps(team: Team, blend: number, isUser: boolean, focus: number[], injMult = 1, devMult: (p: Player) => number = () => 1, heal = 0): string[] {
   const d = depth(team)
   const played: [Player, number][] = []
   for (const pos of POSITIONS) {
@@ -318,7 +454,7 @@ function applySnaps(team: Team, blend: number, isUser: boolean, focus: number[],
   for (const [p, snaps] of played) {
     p.snaps += snaps
     if (snaps > 0 && rnd() < 0.014 * injMult * (snaps / 60) * (p.trait === 'Injury-prone' ? 2 : 1)) {
-      p.inj = ri(1, 4)
+      p.inj = Math.max(1, ri(1, 4) - heal)
       hurt.push(`${p.pos} ${p.first} ${p.last} is hurt, out ${p.inj} week${p.inj > 1 ? 's' : ''}.`)
     }
   }
@@ -359,8 +495,16 @@ export function simWeek(g: State) {
     if (isUser) gm.rotation = g.rotation
     const neutral = gm.type === 'final' || gm.type === 'ccg'
     const big = gm.type === 'ccg' || gm.type === 'semi' || gm.type === 'final'
-    const [hs, as] = playGame(h, a, hb, ab, neutral ? 0 : 0.03, gameDayBoost(g, h, big), gameDayBoost(g, a, big))
+    const homeAdv = neutral ? 0 : 0.03 + (userHome ? facilityLevel(g, 'stadium') * STADIUM_EDGE : 0)
+    const myPlan = g.plan ?? DEFAULT_PLAN
+    const hp = userHome ? myPlan : aiPlan(h, a), ap = userAway ? myPlan : aiPlan(a, h)
+    const res = playGame({ team: h, blend: hb, boost: gameDayBoost(g, h, big), plan: hp }, { team: a, blend: ab, boost: gameDayBoost(g, a, big), plan: ap }, homeAdv, isUser)
+    const hs = res.hs, as = res.as
     gm.hs = hs; gm.as = as; gm.played = true
+    if (isUser) {
+      gm.log = res.log; gm.plan = { ...myPlan }; gm.oppPlan = userHome ? ap : hp
+      gm.potg = playerOfGame(userHome ? h : a, res.credit)
+    }
     const hw = hs > as
     if (h.conf >= 0 && gm.type !== 'ccg' && gm.type !== 'semi' && gm.type !== 'final') { hw ? h.w++ : h.l++ }
     if (a.conf >= 0 && gm.type !== 'ccg' && gm.type !== 'semi' && gm.type !== 'final') { hw ? a.l++ : a.w++ }
@@ -368,8 +512,10 @@ export function simWeek(g: State) {
     if (gm.type === 'ccg') (hw ? h : a).confChamp = true
     if (gm.type === 'final') { const c = hw ? h : a; c.champ = true; g.champion = c.id }
     const im = INJ_MULT[settingsOf(g).injuries]
-    const hurtH = h.conf >= 0 ? applySnaps(h, hb, userHome, g.focus, im, userHome ? p => devBoost(g, p) : undefined) : []
-    const hurtA = a.conf >= 0 ? applySnaps(a, ab, userAway, g.focus, im, userAway ? p => devBoost(g, p) : undefined) : []
+    const med = facilityLevel(g, 'medical')
+    const userInj = im * (1 - med * 0.12), heal = Math.floor(med / 2)
+    const hurtH = h.conf >= 0 ? applySnaps(h, hb, userHome, g.focus, userHome ? userInj : im, userHome ? p => devBoost(g, p) : undefined, userHome ? heal : 0) : []
+    const hurtA = a.conf >= 0 ? applySnaps(a, ab, userAway, g.focus, userAway ? userInj : im, userAway ? p => devBoost(g, p) : undefined, userAway ? heal : 0) : []
     if (isUser) {
       const opp = userHome ? a : h
       const my = userHome ? hs : as, their = userHome ? as : hs, win = my > their
@@ -386,7 +532,7 @@ export function simWeek(g: State) {
       const ranked = (oppRank.get(opp.id) ?? 99) <= TOP_N
       for (const r of g.recruits) {
         if (r.visitWeek !== g.week || r.committed !== null) continue
-        const delta = win ? (ranked ? 18 : 10) : -8
+        const delta = visitSwing(g, win, ranked)
         r.interest = Math.max(0, r.interest + delta)
         log(g, 'visit', win
           ? `${r.pos} ${r.first} ${r.last} loved the ${ranked ? 'win over a ranked team' : 'win'} on his visit (+${delta}).`
@@ -704,7 +850,8 @@ export function expectedGain(g: State, r: Recruit, action: 'contact' | 'visit') 
   const needBoost = rosterNeeds(g).need[r.pos] > 0 ? 1.2 : 1
   const base = action === 'visit' ? 30 : 10
   const resist = Math.max(0.6, 1 + (r.stars - g.teams[g.user].prestige / 2) * 0.15)
-  return base * prestigeFactor(g) * needBoost * DIFF_MULT[settingsOf(g).difficulty] * recruitBoost(g) / resist
+  const lounge = action === 'visit' ? 1 + facilityLevel(g, 'lounge') * 0.1 : 1
+  return base * prestigeFactor(g) * needBoost * DIFF_MULT[settingsOf(g).difficulty] * recruitBoost(g) * lounge / resist
 }
 export function recruitAction(g: State, r: Recruit, action: 'contact' | 'scout' | 'visit' | 'offer') {
   if (r.committed !== null || g.phase !== 'season' || g.week > REGULAR_WEEKS) return 'Recruiting is closed.'
@@ -830,6 +977,12 @@ export function advanceOffseason(g: State) {
   ad.bonus = met * AD_POINTS
   const fired = ad.strikes >= AD_STRIKES
   report.ad = { met, total: results.length, strikes: ad.strikes, fired, lines: results.map(r => `${r.done ? 'Met' : 'Missed'}: ${r.x.text}`) }
+  const draft = runDraft(g)
+  const myPicks = draft.picks.filter(x => x.team === g.user)
+  report.drafted = myPicks.map(x => `#${x.pick} (round ${x.round}) ${x.pos} ${x.name} (${x.ovr})${x.early ? ', left early' : ''}`)
+  const income = boosterIncome(g, met, myPicks.length)
+  g.boosters = Math.round(((g.boosters ?? 0) + income) * 10) / 10
+  report.boosters = income
   resolvePortal(g, report)
   // graduation and progression
   for (const t of g.teams) {
@@ -898,8 +1051,8 @@ function makeMarket(g: State): Coach[] {
 export const staffBudget = (g: State) => Math.round((0.6 + g.teams[g.user].prestige * 0.6) * 10) / 10
 export const payroll = (g: State) => Math.round((g.staff ?? []).reduce((s, c) => s + c.salary, 0) * 10) / 10
 export const staffLevel = (g: State, role: Role) => g.staff?.find(c => c.role === role)?.level ?? 0
-const recruitBoost = (g: State) => 1 + staffLevel(g, 'assistant') * 0.06
-function devBoost(g: State, p: Player) { return 1 + staffLevel(g, coachFor(p.pos)) * 0.08 }
+const recruitBoost = (g: State) => 1 + staffLevel(g, 'assistant') * 0.06 + pipelineBoost(g)
+function devBoost(g: State, p: Player) { return 1 + staffLevel(g, coachFor(p.pos)) * 0.08 + facilityLevel(g, 'weights') * 0.05 }
 /** Coordinators on your team, and Big-game starters in title and playoff games. */
 export function gameDayBoost(g: State, t: Team, big = false) {
   const b = { off: 0, def: 0 }
@@ -926,6 +1079,87 @@ export function hireCoach(g: State, id: number) {
   g.news.unshift(`Hired ${c.first} ${c.last} as ${ROLES[c.role].title.toLowerCase()}.`)
   return `Hired ${c.first} ${c.last}.`
 }
+
+// ---------- Facilities ----------
+export type Facility = 'weights' | 'lounge' | 'stadium' | 'medical'
+export const FACILITIES: Record<Facility, { name: string; does: string }> = {
+  weights: { name: 'Weight room', does: '+5% player growth per level' },
+  lounge: { name: 'Recruiting lounge', does: '+10% interest from visits and +2 game-day visit bonus per level' },
+  stadium: { name: 'Stadium', does: 'Bigger home-field edge each level' },
+  medical: { name: 'Medical center', does: '12% fewer injuries per level, and every 2 levels heal a week faster' },
+}
+export const FACILITY_LIST = Object.keys(FACILITIES) as Facility[]
+export const FACILITY_MAX = 5
+export const STARTING_BOOSTERS = 1
+const STADIUM_EDGE = 0.008
+/** Booster money ($M) for the next level. */
+export const facilityCost = (level: number) => level + 1
+export const facilityLevel = (g: State, f: Facility) => g.facilities?.[f] ?? 0
+export function upgradeFacility(g: State, f: Facility) {
+  const lvl = facilityLevel(g, f)
+  if (lvl >= FACILITY_MAX) return 'Already maxed out.'
+  const cost = facilityCost(lvl)
+  if ((g.boosters ?? 0) < cost) return `You need $${cost}M from boosters.`
+  g.boosters = Math.round(((g.boosters ?? 0) - cost) * 10) / 10
+  g.facilities = { ...(g.facilities ?? {}), [f]: lvl + 1 }
+  g.news.unshift(`${FACILITIES[f].name} upgraded to level ${lvl + 1}.`)
+  return `${FACILITIES[f].name} is now level ${lvl + 1}.`
+}
+/** Interest swing from a game-day visit. */
+export function visitSwing(g: State, win: boolean, ranked: boolean) {
+  return win ? (ranked ? 18 : 10) + facilityLevel(g, 'lounge') * 2 : -8
+}
+/** Booster money from the season just finished, in $M. */
+function boosterIncome(g: State, goalsMet: number, picks: number) {
+  const me = g.teams[g.user]
+  const x = 0.5 + me.w * 0.12 + goalsMet * 0.4 + (me.confChamp ? 0.5 : 0) + (me.playoff ? 0.5 : 0) + (me.champ ? 1 : 0) + picks * 0.3
+  return Math.round(x * 10) / 10
+}
+
+// ---------- Pro draft ----------
+export interface DraftPick { pick: number; round: number; name: string; pos: Pos; ovr: number; team: number; early: boolean }
+export interface DraftClass { year: number; picks: DraftPick[] }
+export const DRAFT_ROUNDS = 3
+export const DRAFT_PER_ROUND = 8
+const DRAFT_PICKS = DRAFT_ROUNDS * DRAFT_PER_ROUND
+/** Juniors this good may leave early. */
+export const EARLY_OVR = 76
+export const EARLY_CHANCE = 0.6
+const draftScore = (p: Player) => p.ovr + (p.pot - p.ovr) * 0.15
+function draftPool(g: State, declares: (p: Player) => boolean) {
+  const inPortal = new Set(portalEntries(g).map(e => e.p.id))
+  return g.teams.flatMap(t => t.roster
+    .filter(p => p.year >= 4 || (p.year === 3 && p.ovr >= EARLY_OVR && !inPortal.has(p.id) && declares(p)))
+    .map(p => ({ p, t })))
+    .sort((a, b) => draftScore(b.p) - draftScore(a.p)).slice(0, DRAFT_PICKS)
+}
+/** Your players projected to be drafted if it were held today, counting every eligible junior as declaring. */
+export function draftWatch(g: State) {
+  const pool = draftPool(g, () => true)
+  return pool.map((x, i) => ({ p: x.p, pick: i + 1, round: Math.floor(i / DRAFT_PER_ROUND) + 1 }))
+    .filter(x => pool[x.pick - 1].t.id === g.user)
+}
+function runDraft(g: State): DraftClass {
+  const pool = draftPool(g, () => rnd() < EARLY_CHANCE)
+  const picks: DraftPick[] = pool.map(({ p, t }, i) => ({
+    pick: i + 1, round: Math.floor(i / DRAFT_PER_ROUND) + 1, name: `${p.first} ${p.last}`, pos: p.pos,
+    ovr: Math.round(p.ovr), team: t.id, early: p.year === 3,
+  }))
+  const gone = new Set(pool.map(x => x.p.id))
+  for (const t of g.teams) t.roster = t.roster.filter(x => !gone.has(x.id))
+  g.focus = g.focus.filter(x => !gone.has(x))
+  const mine = picks.filter(x => x.team === g.user)
+  if (mine.length) g.news.unshift(`Pro draft: ${mine.length} of your players were drafted.`)
+  const cls = { year: g.year, picks }
+  g.drafts = [cls, ...(g.drafts ?? [])].slice(0, 6)
+  return cls
+}
+/** Your picks in the last 3 drafts. */
+export function pipelinePicks(g: State) {
+  return (g.drafts ?? []).slice(0, 3).reduce((n, d) => n + d.picks.filter(x => x.team === g.user).length, 0)
+}
+/** Each recent pick adds 3% recruiting interest, up to 30%. */
+export const pipelineBoost = (g: State) => Math.min(0.3, pipelinePicks(g) * 0.03)
 
 // ---------- Athletic director ----------
 export type GoalKind = 'wins' | 'conf' | 'confWins' | 'rank' | 'recruits'
@@ -961,11 +1195,17 @@ export function goalProgress(g: State, x: Goal): { done: boolean; now: string } 
     return { done: r <= x.target, now: `Ranked #${r}` }
   }
   const place = me.confChamp ? 1 : confStandings(g, me.conf).indexOf(me) + 1
-  return { done: x.target === 1 ? !!me.confChamp : place <= x.target, now: me.confChamp ? 'Conference champions' : `${place}${['st', 'nd', 'rd'][place - 1] ?? 'th'} in the conference` }
+  const placeText = `${place}${['st', 'nd', 'rd'][place - 1] ?? 'th'} in the conference standings`
+  if (x.target === 1) {
+    const titleGame = g.schedule.find(s => s.type === 'ccg' && s.played && (s.home === g.user || s.away === g.user))
+    return { done: !!me.confChamp, now: me.confChamp ? 'Conference champions' : titleGame ? 'Lost the title game' : g.phase === 'offseason' ? 'Missed the title game' : placeText }
+  }
+  return { done: place <= x.target, now: me.confChamp ? 'Conference champions' : placeText }
 }
 export const weeklyPoints = (g: State) => POINTS_PER_WEEK + (g.ad?.bonus ?? 0)
 /** Gives older saves a staff, a hiring market and AD goals. */
 export function ensureProgram(g: State) {
+  if (g.boosters === undefined) { g.boosters = STARTING_BOOSTERS; g.facilities = g.facilities ?? {} }
   if (g.staff && g.staffMarket && g.ad) return
   const seeded = getSeed()
   setSeed(g.seed)

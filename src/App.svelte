@@ -1,6 +1,6 @@
 <script lang="ts">
   import * as G from './lib/game'
-  import type { State, Recruit, Pos, Player, Game, PortalEntry } from './lib/game'
+  import type { State, Recruit, Pos, Player, Game, PortalEntry, Lean } from './lib/game'
 
   const KEY = 'pixel-football-manager-v2'
   function load(): State | null {
@@ -98,7 +98,38 @@
   const boostOf = (t: G.Team) => { const b = G.gameDayBoost(g!, t, bigGame); return (b.off + b.def) / 2 }
   const myOvr = $derived(me && myR ? myR.ovr + boostOf(me) : 0)
   const oppOvr = $derived(opp && oppR ? oppR.ovr + boostOf(opp) : 0)
+  const plan = $derived(g?.plan ?? G.DEFAULT_PLAN)
+  const scout = $derived(opp && opp.conf >= 0 ? G.scouting(opp) : null)
+  // The game plan is left out on purpose, so picking one is a read on the opponent, not a number to max.
   const prob = $derived(myR && oppR ? G.winProb(myOvr + (next?.home === g?.user ? 1 : -1), oppOvr) : 0.5)
+  const OFF_LABEL: Record<Lean, string> = { run: 'Run-heavy', balanced: 'Balanced', pass: 'Pass-heavy' }
+  const DEF_LABEL: Record<Lean, string> = { run: 'Stop the run', balanced: 'Balanced', pass: 'Stop the pass' }
+  function setPlan(k: 'off' | 'def', v: Lean) { if (g) g.plan = { ...(g.plan ?? G.DEFAULT_PLAN), [k]: v } }
+  let showDrives = $state(false)
+  let viewGame = $state<Game | null>(null)
+  function lineScore(gm: Game) {
+    const qs = Math.max(4, ...(gm.log ?? []).map(d => d.q))
+    const rows: number[][] = [Array(qs).fill(0), Array(qs).fill(0)]
+    for (const d of gm.log ?? []) rows[d.side][d.q - 1] += d.pts
+    return { qs, rows }
+  }
+  /** Team stats for the box score, read from the drive log. Index 0 is the home team. */
+  function teamStats(gm: Game) {
+    const z = () => ({ td: 0, fg: 0, drives: 0, scoring: 0, sacks: 0, turnovers: 0, missed: 0 })
+    const st = [z(), z()]
+    for (const d of gm.log ?? []) {
+      if (d.q > 4) { if (d.pts === 7) st[d.side].td++; else if (d.pts === 3) st[d.side].fg++; continue }
+      const me = st[d.side], them = st[1 - d.side]
+      me.drives++
+      if (d.pts > 0) me.scoring++
+      if (d.pts === 7) me.td++
+      if (d.pts === 3) me.fg++
+      if (d.text.includes('missed a')) me.missed++
+      if (/intercepted|fumbled/.test(d.text)) me.turnovers++
+      if (d.text.startsWith('Sacked')) them.sacks++
+    }
+    return st
+  }
   const offers = $derived(g ? g.recruits.filter(r => r.offered && r.committed === null).length : 0)
   const recruitingOpen = $derived(!!g && g.phase === 'season' && g.week <= G.REGULAR_WEEKS)
   const weekLabel = $derived(!g ? '' : g.phase === 'offseason' ? 'Offseason'
@@ -171,7 +202,10 @@
   let pPos = $state<'ALL' | Pos>('ALL')
   let pSelId = $state<number | null>(null)
   $effect(() => { if (g && g.phase === 'offseason' && !g.portal && !g.report) G.openPortal(g) })
-  $effect(() => { if (g && (!g.staff || !g.staffMarket || !g.ad)) G.ensureProgram(g) })
+  $effect(() => { if (g && (!g.staff || !g.staffMarket || !g.ad || g.boosters === undefined)) G.ensureProgram(g) })
+  function upgrade(f: G.Facility) { if (g) flash(G.upgradeFacility(g, f)) }
+  const watch = $derived(g ? G.draftWatch(g) : [])
+  let draftYear = $state(0)
   const budget = $derived(g ? G.staffBudget(g) : 0)
   const pay = $derived(g ? G.payroll(g) : 0)
   function hire(id: number) { if (g) flash(G.hireCoach(g, id)) }
@@ -266,6 +300,57 @@
     </div>
   </div>
   {#if playerSel === p.id}<div class="rinline">{@render playerCard(p, isStarter)}</div>{/if}
+{/snippet}
+
+{#snippet boxScore(gm: Game)}
+  {@const h = G.team(g!, gm.home)}
+  {@const a = G.team(g!, gm.away)}
+  {@const ls = lineScore(gm)}
+  {@const st = teamStats(gm)}
+  <table class="linescore">
+    <thead><tr><th></th>{#each Array(ls.qs) as _, i}<th class="r">{i < 4 ? `Q${i + 1}` : 'OT'}</th>{/each}<th class="r">T</th></tr></thead>
+    <tbody>
+      {#each [h, a] as t, side}
+        <tr class:me={t.id === g!.user}><td><div class="tcell">{@render badge(t, 'sm')} {t.abbr}</div></td>
+          {#each ls.rows[side] as v}<td class="r">{v}</td>{/each}<td class="r"><b>{side === 0 ? gm.hs : gm.as}</b></td></tr>
+      {/each}
+    </tbody>
+  </table>
+  <table class="teamstats">
+    <thead><tr><th class="r">{h.abbr}</th><th></th><th>{a.abbr}</th></tr></thead>
+    <tbody>
+      {#each [['Touchdowns', 'td'], ['Field goals', 'fg'], ['Scoring drives', 'scoring'], ['Missed field goals', 'missed'], ['Sacks', 'sacks'], ['Turnovers', 'turnovers']] as [label, k]}
+        {@const hv = st[0][k as keyof typeof st[0]]}
+        {@const av = st[1][k as keyof typeof st[1]]}
+        {@const better = k === 'turnovers' || k === 'missed' ? (hv < av ? 0 : av < hv ? 1 : -1) : (hv > av ? 0 : av > hv ? 1 : -1)}
+        <tr><td class="r" class:lead={better === 0}>{k === 'scoring' ? `${hv} of ${st[0].drives}` : hv}</td><th>{label}</th><td class:lead={better === 1}>{k === 'scoring' ? `${av} of ${st[1].drives}` : av}</td></tr>
+      {/each}
+    </tbody>
+  </table>
+  {#if gm.potg}<p class="potg"><span class="eyebrow">Player of the game</span> {gm.potg}</p>{/if}
+{/snippet}
+
+{#snippet gameLog(gm: Game, withBox = true)}
+  {@const h = G.team(g!, gm.home)}
+  {@const a = G.team(g!, gm.away)}
+  {#if withBox}{@render boxScore(gm)}{/if}
+  {#if gm.plan && gm.oppPlan}
+    {@const guessed = gm.plan.def === gm.oppPlan.off}
+    <p class="muted small">You ran {OFF_LABEL[gm.plan.off].toLowerCase()} and set your defense to {DEF_LABEL[gm.plan.def].toLowerCase()}. They went {OFF_LABEL[gm.oppPlan.off].toLowerCase()}{guessed ? ', so your defense read it right.' : '.'}</p>
+  {/if}
+  {#if gm.log}
+    <ol class="drives">
+      {#each gm.log as d}
+        {@const t = d.side === 0 ? h : a}
+        <li class:scored={d.pts > 0} class:mine={t.id === g!.user}>
+          <span class="dq">{d.q > 4 ? 'OT' : `Q${d.q}`}</span>
+          <span class="dteam" style="--c:{t.color}">{t.abbr}</span>
+          <span class="grow">{d.text}{d.pts ? ` (+${d.pts})` : ''}</span>
+          <span class="dscore">{d.score[0]}-{d.score[1]}</span>
+        </li>
+      {/each}
+    </ol>
+  {/if}
 {/snippet}
 
 {#snippet traitBox(t: G.Trait)}
@@ -549,6 +634,20 @@
               <p class="muted small">{ROT.find(r => r.v === g!.rotation)?.note}</p>
               {#if next.type === 'cupcake'}<p class="hint">Cupcake week. Good time to get your bench real snaps.</p>{/if}
               {#if g.rotation > 0 && noBackup.length}<p class="muted small">No backup at {noBackup.join(', ')}, so those starters stay in.</p>{/if}
+              {#if scout}
+                <div class="gameplan">
+                  <div class="gp-head"><h4>Game plan</h4></div>
+                  <div class="scout">
+                    <div><small>Scouting their offense</small><b>{scout.offense}</b></div>
+                    <div><small>Scouting their defense</small><b>{scout.defense}</b></div>
+                  </div>
+                  <div class="gp-row"><span class="muted small">Offense</span>
+                    <div class="seg">{#each G.LEANS as v}<button class:on={plan.off === v} onclick={() => setPlan('off', v)}>{OFF_LABEL[v]}</button>{/each}</div></div>
+                  <div class="gp-row"><span class="muted small">Defense</span>
+                    <div class="seg">{#each G.LEANS as v}<button class:on={plan.def === v} onclick={() => setPlan('def', v)}>{DEF_LABEL[v]}</button>{/each}</div></div>
+                  <p class="muted small">Lean into what your team does well and where they're weak, and set your defense for what you think they'll call. Coaches mix it up, so it's never certain.</p>
+                </div>
+              {/if}
               <button class="btn primary block" onclick={sim}>Play week {g.week}</button>
             {:else}
               <div class="eyebrow">{weekLabel}</div>
@@ -768,6 +867,39 @@
             </div>
             <p class="muted small">Each goal met adds {G.AD_PRESTIGE} prestige and {G.AD_POINTS} recruiting points a week next season{ad.bonus ? ` (this season: +${ad.bonus})` : ''}. Meet fewer than {G.AD_GOALS_TO_PASS} and you get a strike. {G.AD_STRIKES} strikes in a row and you're fired.</p>
           </section>
+
+          <section class="card flush">
+            <div class="cardhead"><h3>Facilities</h3><span class="money">${(g.boosters ?? 0).toFixed(1)}M <small class="muted">from boosters</small></span></div>
+            {#each G.FACILITY_LIST as f}
+              {@const lvl = G.facilityLevel(g, f)}
+              {@const cost = G.facilityCost(lvl)}
+              <div class="facility">
+                <div class="grow">
+                  <b>{G.FACILITIES[f].name}</b>
+                  <span class="lvl">{#each Array(G.FACILITY_MAX) as _, i}<i class:on={i < lvl}></i>{/each}</span>
+                  <div class="muted small">{G.FACILITIES[f].does}.</div>
+                </div>
+                {#if lvl >= G.FACILITY_MAX}<span class="tag ok">Maxed</span>
+                {:else}<button class="btn sm" class:primary={(g.boosters ?? 0) >= cost} disabled={(g.boosters ?? 0) < cost} onclick={() => upgrade(f)}>Upgrade ${cost}M</button>{/if}
+              </div>
+            {/each}
+            <p class="muted small pad">Boosters pay out on signing day: more for wins, titles, AD goals met and players drafted. Upgrades are permanent.</p>
+          </section>
+
+          <section class="card flush">
+            <div class="cardhead"><h3>Pro draft watch</h3><span class="muted small">Pipeline: {G.pipelinePicks(g)} picks in 3 drafts, +{Math.round(G.pipelineBoost(g) * 100)}% recruiting</span></div>
+            {#each watch as w (w.p.id)}
+              <div class="facility">
+                <span class="pill {w.p.pos}">{w.p.pos}</span>
+                <div class="grow"><b>{w.p.first} {w.p.last}</b> <span class="muted small">{G.YEARS[w.p.year]} · {Math.round(w.p.ovr)} OVR</span>
+                  {#if w.p.year === 3}<div class="small hot">Junior: {Math.round(G.EARLY_CHANCE * 100)}% chance he leaves early</div>{/if}</div>
+                <span class="rstat lead">Round {w.round} · #{w.pick}</span>
+              </div>
+            {:else}
+              <p class="muted small pad">Nobody projected yet. Seniors and juniors rated {G.EARLY_OVR}+ are draft candidates.</p>
+            {/each}
+            <p class="muted small pad">{G.DRAFT_ROUNDS} rounds of {G.DRAFT_PER_ROUND} on signing day. Each of your picks adds 3% recruiting interest for 3 years (up to 30%) and booster money.</p>
+          </section>
         </div>
         <div class="col">
           <section class="card flush">
@@ -792,12 +924,17 @@
         {#each g.schedule.filter(x => x.home === g!.user || x.away === g!.user).sort((a, b) => a.week - b.week) as gm}
           {@const o = oppOf(gm)}
           {@const res = result(gm)}
-          <div class="srow" class:current={gm.week === g.week && !gm.played}>
+          {#snippet srowBody()}
             <span class="wk">Wk {gm.week}</span>
             {@render badge(o, 'sm')}
-            <div class="grow"><b>{gm.home === g.user ? 'vs' : 'at'} <span class="rk">{rk(o.id)}</span>{o.school}</b><div class="muted small">{typeTag[gm.type]}{gm.played && gm.rotation ? (gm.rotation >= 0.5 ? ' · backups played 2nd half' : ' · rotated') : ''}</div></div>
+            <div class="grow"><b>{gm.home === g!.user ? 'vs' : 'at'} <span class="rk">{rk(o.id)}</span>{o.school}</b><div class="muted small">{typeTag[gm.type]}{gm.played && gm.rotation ? (gm.rotation >= 0.5 ? ' · backups played 2nd half' : ' · rotated') : ''}</div></div>
             {#if res}<span class="result" class:w={res.w}>{res.w ? 'W' : 'L'} {res.text}</span>{:else}<span class="muted small">Upcoming</span>{/if}
-          </div>
+          {/snippet}
+          {#if gm.log}
+            <button class="srow clickable" class:current={gm.week === g.week && !gm.played} onclick={() => (viewGame = gm)} aria-label="Game log, week {gm.week}">{@render srowBody()}</button>
+          {:else}
+            <div class="srow" class:current={gm.week === g.week && !gm.played}>{@render srowBody()}</div>
+          {/if}
         {/each}
       </section>
 
@@ -879,6 +1016,28 @@
           <div class="srow"><span class="wk">{h.year}</span><b class="grow">{h.finish}</b><span>{h.record}</span><span class="muted small">Prestige {h.prestige}</span></div>
         {/each}
       </section>
+      {#if g.drafts?.length}
+        {@const d = g.drafts[Math.min(draftYear, g.drafts.length - 1)]}
+        <section class="card flush draftboard">
+          <div class="cardhead"><h3>Pro draft</h3>
+            <select bind:value={draftYear} aria-label="Draft year">{#each g.drafts as x, i}<option value={i}>{x.year + 1} draft · {x.picks.filter(p => p.team === g!.user).length} yours</option>{/each}</select></div>
+          <div class="scroll">
+            <table>
+              <thead><tr><th class="r">Pick</th><th>Rd</th><th>Player</th><th class="r">OVR</th><th>School</th></tr></thead>
+              <tbody>
+                {#each d.picks as x}
+                  <tr class:me={x.team === g.user}>
+                    <td class="r rnum">{x.pick}</td><td>{x.round}</td>
+                    <td><span class="pill {x.pos}">{x.pos}</span> {x.name}{#if x.early} <span class="tag">Early</span>{/if}</td>
+                    <td class="r">{x.ovr}</td>
+                    <td><div class="tcell">{@render badge(g.teams[x.team], 'sm')} {g.teams[x.team].school}</div></td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      {/if}
     {:else if tab === 'settings'}
       {@const st = G.settingsOf(g)}
       <div class="layout">
@@ -957,6 +1116,10 @@
             <div><h4>Transfers in</h4>{#each r.transfersIn ?? [] as x}<div>{x}</div>{:else}<div class="muted">None</div>{/each}
               <h4>Transfers out</h4>{#each r.transfersOut ?? [] as x}<div>{x}</div>{:else}<div class="muted">None</div>{/each}</div>
           {/if}
+          {#if r.drafted}
+            <div><h4>Drafted</h4>{#each r.drafted as x}<div>{x}</div>{:else}<div class="muted">Nobody drafted</div>{/each}
+              {#if r.boosters !== undefined}<h4>Boosters</h4><div>+${r.boosters.toFixed(1)}M for facilities</div>{/if}</div>
+          {/if}
           <div><h4>Big jumps</h4>{#each r.bigJumps as x}<div>{x}</div>{:else}<div class="muted">No big jumps</div>{/each}</div>
         </div>
         {#if r.ad}
@@ -1001,6 +1164,12 @@
             {@render badge(ro, 'md')}
           </div>
           <h2>{rc.result.win ? 'Win' : 'Loss'} {rc.result.home ? 'vs' : 'at'} {ro.school}</h2>
+          {@const rg = g.schedule.find(x => x.week === rc.week && (x.home === g!.user || x.away === g!.user))}
+          {#if rg?.log}
+            {@render boxScore(rg)}
+            <button class="link inline" onclick={() => (showDrives = !showDrives)}>{showDrives ? 'Hide' : 'Show'} the drive-by-drive log</button>
+            {#if showDrives}<div class="recaplog">{@render gameLog(rg, false)}</div>{/if}
+          {/if}
         {:else}
           <h2>{rc.label} results</h2>
         {/if}
@@ -1016,7 +1185,7 @@
         {:else}
           <p class="muted">A quiet week otherwise.</p>
         {/if}
-        <button class="btn primary block" onclick={() => (g!.recap = null)}>{g.phase === 'offseason' ? 'On to the offseason' : `Continue to ${G.weekName(g.week).toLowerCase()}`}</button>
+        <button class="btn primary block" onclick={() => { g!.recap = null; showDrives = false }}>{g.phase === 'offseason' ? 'On to the offseason' : `Continue to ${G.weekName(g.week).toLowerCase()}`}</button>
       </div>
     </div>
   {/if}
@@ -1063,6 +1232,17 @@
           <button class="btn" onclick={() => (editId = null)}>Cancel</button>
           <button class="btn primary" onclick={saveEdit}>Save team</button>
         </div>
+      </div>
+    </div>
+  {/if}
+  {#if viewGame}
+    {@const vg = viewGame}
+    <div class="modal" role="dialog" aria-modal="true" aria-label="Game log" onclick={(e) => e.target === e.currentTarget && (viewGame = null)}
+      onkeydown={(e) => e.key === 'Escape' && (viewGame = null)} tabindex="-1">
+      <div class="card recap">
+        <div class="cardhead0"><div class="eyebrow">{G.weekName(vg.week)} · {typeTag[vg.type]}</div><button class="btn sm" onclick={() => (viewGame = null)}>Close</button></div>
+        <h2>{G.team(g, vg.away).school} at {G.team(g, vg.home).school}</h2>
+        {@render gameLog(vg)}
       </div>
     </div>
   {/if}

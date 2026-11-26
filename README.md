@@ -43,6 +43,10 @@ Plain functions that mutate one `State` object. The UI keeps that object in a Sv
 - **Game-day visits**: a visit during a home week sets `visitWeek`. A win adds 10 interest (18 against a ranked team), a loss costs 8.
 - **Coaching staff**: `g.staff` holds an Assistant, OC and DC (1 to 5 stars), and `g.staffMarket` the coaches you can hire. The budget is `staffBudget()`, from prestige. Hiring is open in the offseason and before week 1. Per star: Assistant +6% recruiting and portal interest, +3 morale, kicker growth. OC and DC +0.8 offense or defense on game day and +8% growth at their positions.
 - **AD goals**: `makeGoals()` sets 3 goals from prestige; `goalProgress()` tracks them. On signing day each goal met adds `AD_PRESTIGE` and `AD_POINTS` weekly recruiting points. Meeting fewer than `AD_GOALS_TO_PASS` adds a strike, and `AD_STRIKES` strikes in a row gets you fired (`g.fired`), with offers from smaller schools (`takeJob()`). `ensureProgram()` adds a staff and goals to older saves.
+- **Game plan**: `g.plan` holds an offense lean (run, balanced, pass) and a defense lean (what it sells out to stop). `planEdge()` rewards leaning into your strengths and the opponent's weak spot, and guessing their offense. `aiPlan()` is how the AI calls it, with some randomness. `planPreview()` and `scouting()` feed the matchup card. `PLAN_WEIGHT` sets how much it matters.
+- **Game sim**: `playGame()` plays 22 alternating drives. Your games keep a drive log with named players (`Game.log`), both plans and a player of the game (`playerOfGame()`).
+- **Facilities**: weight room, recruiting lounge, stadium and medical center, levels 0 to 5 (`g.facilities`), paid with booster money (`g.boosters`, from `boosterIncome()` on signing day). The next level costs `facilityCost()`.
+- **Pro draft**: `runDraft()` on signing day takes the top 24 seniors and declaring juniors (`EARLY_OVR`, `EARLY_CHANCE`) league-wide. `g.drafts` keeps the last 6. Your picks in the last 3 drafts add 3% recruiting interest each (`pipelineBoost()`, up to 30%). `draftWatch()` projects your picks.
 - **Offseason**: `advanceOffseason()` moves prestige toward a target based on results, graduates seniors, develops players, signs recruits, fills empty starter slots with walk-ons and builds the next schedule.
 - **Editing**: `editTeam()`, `renameConf()`, `swapConference()` (only before week 1 is played, rebuilds the schedule).
 - **Settings**: `g.settings` holds recruiting difficulty and injury rate. Older saves without it fall back to `DEFAULT_SETTINGS`.
@@ -65,6 +69,9 @@ All in `game.ts`:
 | Playing-time expectations | `expectedShare()` |
 | AD goals and firing | `makeGoals()`, `AD_STRIKES`, `AD_GOALS_TO_PASS`, `AD_PRESTIGE`, `AD_POINTS` |
 | Staff budget and salaries | `staffBudget()`, `SALARY` |
+| Game plan strength | `PLAN_WEIGHT`, `planEdge()` |
+| Facility costs and effects | `facilityCost()`, `FACILITIES`, `STADIUM_EDGE` |
+| Draft size and early declares | `DRAFT_ROUNDS`, `DRAFT_PER_ROUND`, `EARLY_OVR`, `EARLY_CHANCE` |
 | Ranking weights | `RANK_WEIGHTS`, `RANK_PRIOR_GAMES`, `CONF_PRIOR_GAMES` |
 
 ## Not built yet
