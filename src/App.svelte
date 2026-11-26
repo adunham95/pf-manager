@@ -211,7 +211,7 @@
   const openBench = $derived(me ? Math.max(0, G.ROSTER_MAX - me.roster.length) : 0)
   const noBackup = $derived(d ? G.POSITIONS.filter(p => d[p].backups.length === 0) : [])
 
-  const STAR_LO = [0, 40, 46, 52, 58, 64]
+  const STAR_LO = [0, 40, 46, 52, 58, G.ELITE_OVR]
   // Unscouted recruits sort by the middle of their star range, so sorting never leaks the real rating.
   const shownOvr = (r: Recruit) => r.scouted ? r.ovr : STAR_LO[r.stars] + 5
   const onBoard = (r: Recruit) => r.committed === g!.user || (r.offered && r.committed === null)
@@ -616,6 +616,8 @@
       <span class="rstat {st.k} big">{st.text}</span>
     </div>
     {#if needs && needs.need[r.pos] > 0 && r.committed === null}<div class="tag need">Fills a need at {r.pos}</div>{/if}
+    {#if r.scouted && r.gem}<div class="gembox"><b>💎 Hidden gem</b><span>Rated like a 5-star, but the other schools still see a {r.stars}-star. He should be easier to land than his rating says.</span></div>{/if}
+    {#if (r.scouted || r.stars === 5) && r.committed === null && G.recruitWouldStart(g!, r)}<div class="tag ok startstag">Day-one starter: he'd start for you as a freshman</div>{/if}
 
     <div class="rd-ratings">
       <div><b>{estRange(r)}</b><small>OVR</small></div>
@@ -902,7 +904,7 @@
               <button class="rrow {st.k}" class:sel={sel?.id === r.id} onclick={() => (selId = r.id)} aria-pressed={sel?.id === r.id}>
                 <span class="pill {r.pos}" class:need={needs.need[r.pos] > 0}>{r.pos}</span>
                 <span class="who">
-                  <span class="pname">{r.first} {r.last}</span>
+                  <span class="pname">{r.first} {r.last}{#if r.scouted && r.gem} <span title="Hidden gem">💎</span>{/if}</span>
                   <span class="stars">{starStr(r.stars)}</span>
                 </span>
                 <span class="rmini">

@@ -44,6 +44,8 @@ export interface Recruit {
   interest: number; rival: number; rivalTeam: number; committed: number | null
   trait?: Trait
   skills?: number[]
+  /** Rated like a 5-star despite fewer stars. Hidden until scouted. */
+  gem?: boolean
   /** Week of a game-day visit. A home win that week adds interest, a loss takes some away. */
   visitWeek?: number
 }
@@ -410,22 +412,40 @@ function balanceHomeAway(g: State, games: Game[]) {
   }
 }
 
+/** Lowest OVR of a 5-star or hidden gem recruit (they range up to 10 higher). */
+export const ELITE_OVR = 68
+/** Share of 2 to 4-star recruits who are secretly rated like 5-stars. */
+const GEM_CHANCE = 0.05
+/** Would this recruit start for you next season, against returning players, other commits and incoming transfers? */
+export function recruitWouldStart(g: State, r: Recruit) {
+  const leaving = portalLeaving(g)
+  const pool = [
+    ...g.teams[g.user].roster.filter(p => p.year < 4 && !leaving.has(p.id)),
+    ...g.recruits.filter(x => x.committed === g.user && x.id !== r.id), ...portalIncoming(g),
+  ].filter(p => p.pos === r.pos).sort((a, b) => b.ovr - a.ovr)
+  const n = STARTERS[r.pos]
+  return pool.length < n || pool[n - 1].ovr < r.ovr
+}
 function starRoll() { const r = rnd(); return r < 0.04 ? 5 : r < 0.18 ? 4 : r < 0.53 ? 3 : r < 0.83 ? 2 : 1 }
 function makeRecruits(g: State): Recruit[] {
   const list: Recruit[] = []
   const weights: Pos[] = ['QB', 'RB', 'RB', 'TE', 'WR', 'WR', 'WR', 'DL', 'DL', 'DL', 'LB', 'LB', 'LB', 'DB', 'DB', 'DB', 'K']
   for (let i = 0; i < 130; i++) {
     const stars = starRoll()
-    const { ovr, pot } = ratingsForStars(stars)
+    let { ovr, pot } = ratingsForStars(stars)
+    // Blue-chip 5-stars can start as freshmen. Hidden gems look like 2-4 stars but are rated like 5-stars; only scouting shows it.
+    const gem = stars >= 2 && stars <= 4 && rnd() < GEM_CHANCE
+    if (stars === 5 || gem) { ovr = ELITE_OVR + ri(0, 10); pot = clamp(ovr + ri(gem ? 8 : 10, gem ? 16 : 18), 0, 99) }
     const rivals = g.teams.filter(t => t.id !== g.user).sort((a, b) => Math.abs(a.prestige - stars * 2) - Math.abs(b.prestige - stars * 2) + (rnd() - 0.5) * 3)
     const pos = pick(weights)
     list.push({
       id: newId(g), first: pick(FIRST), last: pick(LAST), pos, stars, ovr, pot, dev: rollDev(), skills: makeSkills(ovr, pos, rnd),
       scouted: false, offered: false, visited: false, interest: ri(0, 15),
-      rival: 28 + stars * 13 + ri(0, 15), rivalTeam: rivals[0].id, committed: null, trait: rollTrait(),
+      rival: 28 + stars * 13 + ri(0, 15), rivalTeam: rivals[0].id, committed: null, trait: rollTrait(), ...(gem ? { gem } : {}),
     })
   }
-  return list.sort((a, b) => b.stars - a.stars || b.ovr - a.ovr)
+  // By stars only: sorting by OVR would put the hidden gems at the top of their tier and give them away.
+  return list.sort((a, b) => b.stars - a.stars)
 }
 
 // ---------- Depth chart and ratings ----------
