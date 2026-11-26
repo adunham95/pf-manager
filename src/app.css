@@ -386,6 +386,15 @@ button.skillrow:not(:disabled):hover { border-color: var(--blue); }
 .skillrow.on .sktrain { color: var(--blue); }
 .skillhelp { margin: 6px 0 0; }
 
+/* crash / recovery screen */
+.crash { min-height: 100vh; display: grid; place-items: center; padding: 24px 16px; max-width: none; }
+.crash-card { width: min(520px, 100%); background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 24px; border-top: 4px solid var(--hot); }
+.crash-card h1 { margin: 12px 0 6px; font-size: 34px; }
+.crash-card p { color: var(--muted); margin: 0 0 12px; }
+.crash-card details { margin: 0 0 16px; font-size: 13px; color: var(--muted); }
+.crash-card pre { white-space: pre-wrap; word-break: break-word; background: var(--soft); padding: 10px; border-radius: 8px; margin: 8px 0 0; font-size: 12px; }
+.crash-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
 /* rankings */
 .ranklayout { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 4fr); gap: 16px; align-items: start; margin-bottom: 16px; }
 .rk { color: var(--muted); font-weight: 600; font-size: .85em; }

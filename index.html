@@ -22,5 +22,27 @@
   <body>
     <div id="app"></div>
     <script type="module" src="/src/main.ts"></script>
+    <script>
+      // Last-resort recovery: if the game hasn't started after a few seconds (its code failed to load or run),
+      // show Reload and Start over. Plain JS so it works even when the app's own code can't.
+      setTimeout(function () {
+        var app = document.getElementById('app')
+        if (window.__pfmReady || !app || app.children.length) return
+        app.innerHTML = '<main class="crash"><div class="crash-card"><div class="brand">PIXEL <b>FOOTBALL</b></div>' +
+          '<h1>The game didn\'t start</h1><p>Reloading often fixes it. If not, start over: that clears everything this game has stored in your browser, including your career.</p>' +
+          '<div class="crash-actions"><button class="btn" id="pfm-reload">Reload</button><button class="btn danger" id="pfm-wipe">Start over</button></div></div></main>'
+        document.getElementById('pfm-reload').onclick = function () { location.reload() }
+        var armed = false
+        document.getElementById('pfm-wipe').onclick = function () {
+          if (!armed) { armed = true; this.textContent = 'Click again to erase everything'; return }
+          try { localStorage.clear() } catch (e) {}
+          try { sessionStorage.clear() } catch (e) {}
+          var jobs = []
+          if (window.caches) jobs.push(caches.keys().then(function (ks) { return Promise.all(ks.map(function (k) { return caches.delete(k) })) }))
+          if (navigator.serviceWorker) jobs.push(navigator.serviceWorker.getRegistrations().then(function (rs) { return Promise.all(rs.map(function (r) { return r.unregister() })) }))
+          Promise.all(jobs).catch(function () {}).then(function () { location.reload() })
+        }
+      }, 6000)
+    </script>
   </body>
 </html>

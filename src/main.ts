@@ -1,10 +1,18 @@
 import { mount } from 'svelte'
 import './app.css'
-import App from './App.svelte'
+import Root from './Root.svelte'
+import { showStartupError } from './lib/reset'
 
-const app = mount(App, {
-  target: document.getElementById('app')!,
-})
+const target = document.getElementById('app')!
+let app: ReturnType<typeof mount> | undefined
+try {
+  app = mount(Root, { target })
+  ;(window as any).__pfmReady = true
+} catch (err) {
+  console.error('Pixel Football failed to start:', err)
+  showStartupError(target, err)
+  ;(window as any).__pfmReady = true
+}
 
 // Offline support. Only in production builds served over http(s); the dev server and file:// skip it.
 if (import.meta.env.PROD && 'serviceWorker' in navigator && location.protocol.startsWith('http')) {

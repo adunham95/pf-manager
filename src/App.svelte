@@ -1,10 +1,19 @@
 <script lang="ts">
   import * as G from './lib/game'
+  import { SAVE_KEY } from './lib/reset'
   import type { State, Recruit, Pos, Player, Game, PortalEntry, Lean } from './lib/game'
 
-  const KEY = 'pixel-football-manager-v2'
+  const KEY = SAVE_KEY
+  /** Reads the saved career. A damaged save throws, so the recovery screen in Root.svelte shows instead of a blank page. */
   function load(): State | null {
-    try { const raw = localStorage.getItem(KEY); return raw ? JSON.parse(raw) : null } catch { return null }
+    let raw: string | null = null
+    try { raw = localStorage.getItem(KEY) } catch { return null }
+    if (!raw) return null
+    let s: any
+    try { s = JSON.parse(raw) } catch { throw new Error('Your saved career is damaged and can\'t be read.') }
+    if (!s || !Array.isArray(s.teams) || !Array.isArray(s.schedule) || typeof s.user !== 'number' || !s.teams[s.user])
+      throw new Error('Your saved career is missing data and can\'t be loaded.')
+    return s as State
   }
   let g = $state<State | null>(load())
   type Tab = 'team' | 'recruits' | 'portal' | 'program' | 'schedule' | 'league' | 'history' | 'settings'
