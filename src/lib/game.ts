@@ -676,12 +676,19 @@ function playerOfGame(team: Team, credit: ReturnType<typeof playGame>['credit'])
   return best ? `${best.pos} ${best.first} ${best.last}: ${line}` : undefined
 }
 const BLEND_GROWTH = [0, 0.25, 0.6]
+/** In-season growth for a starter per full game. Less than rotated backups get, so rotating still builds the bench. */
+const STARTER_GROWTH = 0.12
 function applySnaps(team: Team, blend: number, isUser: boolean, focus: number[], injMult = 1, devMult: (p: Player) => number = () => 1, heal = 0, focusSkill: Record<number, number> = {}): string[] {
   const d = depth(team)
   const played: [Player, number][] = []
   for (const pos of POSITIONS) {
     const bu = d[pos].backups.slice(0, STARTERS[pos])
-    d[pos].starters.forEach((p, i) => played.push([p, i < bu.length ? Math.round(60 * (1 - blend)) : 60]))
+    d[pos].starters.forEach((p, i) => {
+      const snaps = i < bu.length ? Math.round(60 * (1 - blend)) : 60
+      played.push([p, snaps])
+      // Game experience: starters improve a little every game they play.
+      if (snaps > 0) grow(p, STARTER_GROWTH * (snaps / 60) * devMult(p))
+    })
     for (const p of bu) {
       const snaps = Math.round(60 * blend)
       played.push([p, snaps])
@@ -1270,7 +1277,8 @@ export function advanceOffseason(g: State) {
     t.roster = t.roster.filter(p => p.year < 4)
     for (const p of t.roster) {
       const before = p.ovr
-      const snapBonus = Math.min(3, p.snaps / 250)
+      // Starters already grew during the season, so the offseason bonus for snaps is smaller than it was.
+      const snapBonus = Math.min(2, p.snaps / 360)
       const mult = t.id === g.user ? devBoost(g, p) : 1
       const next = Math.min(p.pot, Math.round(p.ovr + (p.pot - p.ovr) * 0.28 * DEV_MULT[p.dev] * mult + snapBonus + ri(0, 2) + (p.trait === 'Gym rat' ? 1 : 0)))
       addGrowth(p, next - p.ovr)
