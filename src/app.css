@@ -175,7 +175,6 @@ select { background: var(--card); border: 1px solid var(--line); border-radius: 
 .rhq-stats { display: flex; flex-wrap: wrap; gap: 12px 32px; }
 .stat b small { font-size: 16px; color: var(--muted); font-weight: 600; }
 .stat b.hot { color: var(--hot); }
-.needchips { display: flex; flex-wrap: wrap; gap: 6px; }
 .chip { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 4px 10px 4px 5px; border: 1px solid var(--line); border-radius: 10px;
   background: var(--card); font-weight: 700; font-size: 14px; font-variant-numeric: tabular-nums; }
 .chip:first-child { padding-left: 12px; }
@@ -460,10 +459,15 @@ button.skillrow:not(:disabled):hover { border-color: var(--blue); }
 .gembox b { font-size: 15px; }
 
 /* roster outlook */
-.outlook { border-top: 1px solid var(--line); padding-top: 10px; }
-.outlook summary { cursor: pointer; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
-.outlook-grid { display: grid; gap: 4px; margin-top: 8px; }
-.olrow { display: grid; grid-template-columns: auto 3.2em minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 8px; background: var(--soft); }
+.positions { display: grid; gap: 8px; }
+.poshead { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; }
+.poshead .chip { padding-left: 12px; }
+.outlook-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 460px), 1fr)); gap: 6px; }
+.olrow { display: grid; grid-template-columns: auto 3.2em minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 7px 10px; border-radius: 10px;
+  background: var(--soft); border: 1px solid transparent; text-align: left; font: inherit; color: inherit; min-height: 44px; }
+.olrow:hover { border-color: var(--line); }
+.olrow.on { border-color: var(--blue); background: color-mix(in srgb, var(--blue) 10%, var(--card)); box-shadow: inset 3px 0 0 var(--blue); }
+.olrow.dim { opacity: .55; }
 .olcount { font-variant-numeric: tabular-nums; color: var(--muted); }
 .olcount b { color: var(--ink); font-size: 16px; }
 .olwho { display: flex; flex-wrap: wrap; gap: 4px 10px; }

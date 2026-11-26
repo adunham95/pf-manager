@@ -901,21 +901,15 @@
           <div class="stat"><b>{weeksLeft}</b><small>{weeksLeft === 1 ? 'Week left' : 'Weeks left'}</small></div>
         </div>
         {#if !recruitingOpen}<p class="hint">Recruiting is closed until next season.</p>{/if}
-        <div class="needchips" role="group" aria-label="Filter by position">
-          <button class="chip" class:on={posFilter === 'ALL'} onclick={() => (posFilter = 'ALL')}>All</button>
-          {#each G.POSITIONS as p}
-            <button class="chip" class:on={posFilter === p} class:need={needs.need[p] > 0} onclick={() => (posFilter = posFilter === p ? 'ALL' : p)}
-              title="{needs.have[p]} returning or committed, {G.STARTERS[p]} starters needed">
-              <span class="pill {p}">{p}</span><span>{needs.have[p]}/{G.STARTERS[p]}</span>
-            </button>
-          {/each}
-        </div>
-        <p class="muted small">Returning players plus commits against starters needed. Red positions are short, and recruits there gain interest 20% faster.</p>
-        <details class="outlook" open>
-          <summary><b>Next season's roster</b> <span class="muted small">seniors graduate, and juniors rated {G.EARLY_OVR}+ might leave for the draft</span></summary>
+        <div class="positions" role="group" aria-label="Positions: filter recruits">
+          <div class="poshead">
+            <div><b>Positions</b> <span class="muted small">next season · tap one to filter recruits · seniors graduate, juniors rated {G.EARLY_OVR}+ may leave · Short positions gain interest 20% faster</span></div>
+            <button class="chip" class:on={posFilter === 'ALL'} onclick={() => (posFilter = 'ALL')} aria-pressed={posFilter === 'ALL'}>All positions</button>
+          </div>
           <div class="outlook-grid">
             {#each G.rosterOutlook(g) as o}
-              <div class="olrow">
+              <button class="olrow" class:on={posFilter === o.pos} class:dim={posFilter !== 'ALL' && posFilter !== o.pos}
+                onclick={() => (posFilter = posFilter === o.pos ? 'ALL' : o.pos)} aria-pressed={posFilter === o.pos}>
                 <span class="pill {o.pos}">{o.pos}</span>
                 <span class="olcount"><b>{o.returning + o.commits + o.transfers}</b>/{o.need}</span>
                 <span class="olwho small">
@@ -926,10 +920,10 @@
                   {#if !o.seniors.length && !o.earlyRisk.length && !o.commits && !o.transfers}<span class="muted">No changes</span>{/if}
                 </span>
                 <span class="olstatus s-{o.status.replace(' ', '-')}">{o.status}</span>
-              </div>
+              </button>
             {/each}
           </div>
-        </details>
+        </div>
         {#if commitList.length}
           <div class="classrow">
             <span class="eyebrow">Your class</span>
