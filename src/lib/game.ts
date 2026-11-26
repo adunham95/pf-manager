@@ -1176,8 +1176,8 @@ export function userGamesPlayed(g: State) {
 /** Share of snaps a player expects, from his stars and class. Walk-ons expect nothing, freshmen are patient. */
 export function expectedShare(p: Player) {
   if (p.walkOn) return 0
-  let e = [0, 0.05, 0.15, 0.3, 0.45, 0.6][p.stars] ?? 0.3
-  if (p.year >= 3) e += 0.1
+  let e = [0, 0.03, 0.1, 0.15, 0.3, 0.45][p.stars] ?? 0.15
+  if (p.year >= 3) e += 0.05
   if (p.year === 1) e *= 0.5
   return e
 }
