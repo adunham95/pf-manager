@@ -6,6 +6,7 @@ export type Dev = 'Slow' | 'Normal' | 'Fast' | 'Elite'
 export interface Player {
   id: number; first: string; last: string; pos: Pos; year: number
   ovr: number; pot: number; dev: Dev; stars: number; snaps: number; walkOn?: boolean; inj?: number; lock?: boolean
+  trait?: Trait
 }
 export interface Team {
   id: number; school: string; mascot: string; abbr: string; color: string
@@ -22,11 +23,15 @@ export interface Recruit {
   id: number; first: string; last: string; pos: Pos; stars: number
   ovr: number; pot: number; dev: Dev; scouted: boolean; offered: boolean; visited: boolean
   interest: number; rival: number; rivalTeam: number; committed: number | null
+  trait?: Trait
+  /** Week of a game-day visit. A home win that week adds interest, a loss takes some away. */
+  visitWeek?: number
 }
 export interface SeasonReport {
   year: number; record: string; finish: string; prestigeBefore: number; prestigeAfter: number
   graduated: string[]; signed: string[]; cut: string[]; walkOns: number; bigJumps: string[]
   transfersIn?: string[]; transfersOut?: string[]
+  ad?: { met: number; total: number; strikes: number; fired: boolean; lines: string[] }
 }
 export interface PortalEntry {
   /** A copy of the player when he entered. The real one stays on his old roster until signing day. */
@@ -50,6 +55,43 @@ export interface State {
   rotation: number; news: string[]; history: { year: number; record: string; finish: string; prestige: number }[]
   champion: number | null; report: SeasonReport | null
   portal?: Portal | null
+  recap?: Recap | null
+  staff?: Coach[]; staffMarket?: Coach[]
+  ad?: AD
+  /** Set when the AD fires you: schools offering you a job. */
+  fired?: { offers: number[] } | null
+}
+
+// ---------- Traits ----------
+export type Trait = 'Leader' | 'Big-game' | 'Gym rat' | 'Injury-prone' | 'Homesick'
+export const TRAITS: Record<Trait, { good: boolean; text: string }> = {
+  Leader: { good: true, text: 'Teammates at his position are happier.' },
+  'Big-game': { good: true, text: 'Plays up in conference title and playoff games.' },
+  'Gym rat': { good: true, text: 'Gets double from training and grows more in the offseason.' },
+  'Injury-prone': { good: false, text: 'Gets hurt twice as often.' },
+  Homesick: { good: false, text: 'More likely to enter the transfer portal.' },
+}
+function rollTrait(): Trait | undefined {
+  const r = rnd()
+  return r < 0.08 ? 'Leader' : r < 0.15 ? 'Big-game' : r < 0.23 ? 'Gym rat' : r < 0.3 ? 'Injury-prone' : r < 0.36 ? 'Homesick' : undefined
+}
+
+// ---------- Weekly recap ----------
+export type RecapKind = 'injury' | 'commit' | 'lost' | 'visit' | 'goal' | 'league' | 'trait' | 'info'
+export interface Recap {
+  week: number; label: string; rankBefore: number; rankAfter: number
+  result?: { opp: number; my: number; their: number; win: boolean; home: boolean; type: GameType }
+  lines: { kind: RecapKind; text: string }[]
+}
+let building: Recap | null = null
+/** Adds to league news, and to this week's recap while a week is being simmed. */
+function log(g: State, kind: RecapKind, text: string) {
+  g.news.unshift(text)
+  if (g.news.length > 80) g.news.length = 80
+  building?.lines.push({ kind, text })
+}
+export function weekName(week: number) {
+  return week <= REGULAR_WEEKS ? `Week ${week}` : week === 13 ? 'Conference title week' : week === 14 ? 'Playoff semifinals' : 'National title game'
 }
 
 // ---------- RNG (seeded so a save replays the same way) ----------
@@ -120,7 +162,10 @@ function makePlayer(g: State, pos: Pos, stars: number, year: number, walkOn = fa
   if (walkOn) { ovr -= 4; pot -= 6 }
   const dev = rollDev()
   for (let y = 1; y < year; y++) ovr = Math.min(pot, ovr + Math.round((pot - ovr) * 0.3 * DEV_MULT[dev]) + ri(0, 2))
-  return { id: newId(g), first: pick(FIRST), last: pick(LAST), pos, year, ovr, pot, dev, stars, snaps: 0, walkOn }
+  const p: Player = { id: newId(g), first: pick(FIRST), last: pick(LAST), pos, year, ovr, pot, dev, stars, snaps: 0, walkOn }
+  const trait = rollTrait()
+  if (trait) p.trait = trait
+  return p
 }
 function starsForPrestige(p: number) { return clamp(Math.round(p / 2.3 + rnd() * 1.8 - 0.4), 1, 5) }
 
@@ -149,6 +194,9 @@ export function newGame(userIndex: number, seed = Date.now()): State {
   }))
   g.schedule = makeSchedule(g)
   g.recruits = makeRecruits(g)
+  g.staff = (['assistant', 'oc', 'dc'] as Role[]).map(r => makeCoach(g, r, 1))
+  g.staffMarket = makeMarket(g)
+  g.ad = { goals: makeGoals(g), strikes: 0, bonus: 0 }
   g.news.unshift(`Welcome to ${g.teams[userIndex].school}. Your first season kicks off with a cupcake game.`)
   g.seed = getSeed()
   return g
@@ -195,7 +243,7 @@ function makeRecruits(g: State): Recruit[] {
     list.push({
       id: newId(g), first: pick(FIRST), last: pick(LAST), pos: pick(weights), stars, ovr, pot, dev: rollDev(),
       scouted: false, offered: false, visited: false, interest: ri(0, 15),
-      rival: 28 + stars * 13 + ri(0, 15), rivalTeam: rivals[0].id, committed: null,
+      rival: 28 + stars * 13 + ri(0, 15), rivalTeam: rivals[0].id, committed: null, trait: rollTrait(),
     })
   }
   return list.sort((a, b) => b.stars - a.stars || b.ovr - a.ovr)
@@ -243,14 +291,17 @@ function simScore(off: number, def: number, k: number, homeAdv: number) {
   }
   return pts
 }
-function playGame(a: Team, b: Team, ab: number, bb: number, homeAdv = 0.03) {
+type Boost = { off: number; def: number }
+function playGame(a: Team, b: Team, ab: number, bb: number, homeAdv = 0.03, ba: Boost = { off: 0, def: 0 }, bbst: Boost = { off: 0, def: 0 }) {
   const ra = teamRatings(a, ab), rb = teamRatings(b, bb)
+  ra.off += ba.off; ra.def += ba.def; ra.ovr += (ba.off + ba.def) / 2
+  rb.off += bbst.off; rb.def += bbst.def; rb.ovr += (bbst.off + bbst.def) / 2
   let as = simScore(ra.off, rb.def, ra.k, homeAdv), bs = simScore(rb.off, ra.def, rb.k, 0)
   while (as === bs) { if (rnd() < 0.5 + (ra.ovr - rb.ovr) / 60) as += pick([3, 7]); else bs += pick([3, 7]) }
   return [as, bs]
 }
 const BLEND_GROWTH = [0, 0.25, 0.6]
-function applySnaps(team: Team, blend: number, isUser: boolean, focus: number[], injMult = 1): string[] {
+function applySnaps(team: Team, blend: number, isUser: boolean, focus: number[], injMult = 1, devMult: (p: Player) => number = () => 1): string[] {
   const d = depth(team)
   const played: [Player, number][] = []
   for (const pos of POSITIONS) {
@@ -259,14 +310,14 @@ function applySnaps(team: Team, blend: number, isUser: boolean, focus: number[],
     for (const p of bu) {
       const snaps = Math.round(60 * blend)
       played.push([p, snaps])
-      if (snaps > 0) grow(p, blend >= 0.5 ? BLEND_GROWTH[2] : BLEND_GROWTH[1])
+      if (snaps > 0) grow(p, (blend >= 0.5 ? BLEND_GROWTH[2] : BLEND_GROWTH[1]) * devMult(p))
     }
   }
-  if (isUser) for (const id of focus) { const p = team.roster.find(x => x.id === id); if (p) grow(p, 0.35) }
+  if (isUser) for (const id of focus) { const p = team.roster.find(x => x.id === id); if (p) grow(p, 0.35 * (p.trait === 'Gym rat' ? 2 : 1) * devMult(p)) }
   const hurt: string[] = []
   for (const [p, snaps] of played) {
     p.snaps += snaps
-    if (snaps > 0 && rnd() < 0.014 * injMult * (snaps / 60)) {
+    if (snaps > 0 && rnd() < 0.014 * injMult * (snaps / 60) * (p.trait === 'Injury-prone' ? 2 : 1)) {
       p.inj = ri(1, 4)
       hurt.push(`${p.pos} ${p.first} ${p.last} is hurt, out ${p.inj} week${p.inj > 1 ? 's' : ''}.`)
     }
@@ -286,6 +337,12 @@ export function userNextGame(g: State) { return g.schedule.find(x => !x.played &
 
 export function simWeek(g: State) {
   if (g.phase !== 'season') return
+  ensureProgram(g)
+  const before = rankAt(g, lastPlayedWeek(g))
+  const rankBefore = before.find(r => r.team.id === g.user)!.rank
+  const oppRank = new Map(before.map(r => [r.team.id, r.rank]))
+  const goalsBefore = (g.ad?.goals ?? []).map(x => goalProgress(g, x).done)
+  building = { week: g.week, label: weekName(g.week), rankBefore, rankAfter: rankBefore, lines: [] }
   setSeed(g.seed)
   if (g.week === 13) addConfChampionships(g)
   if (g.week === 14) addSemis(g)
@@ -301,7 +358,8 @@ export function simWeek(g: State) {
     const ab = userAway ? g.rotation : gm.type === 'cupcake' ? 0 : 0
     if (isUser) gm.rotation = g.rotation
     const neutral = gm.type === 'final' || gm.type === 'ccg'
-    const [hs, as] = playGame(h, a, hb, ab, neutral ? 0 : 0.03)
+    const big = gm.type === 'ccg' || gm.type === 'semi' || gm.type === 'final'
+    const [hs, as] = playGame(h, a, hb, ab, neutral ? 0 : 0.03, gameDayBoost(g, h, big), gameDayBoost(g, a, big))
     gm.hs = hs; gm.as = as; gm.played = true
     const hw = hs > as
     if (h.conf >= 0 && gm.type !== 'ccg' && gm.type !== 'semi' && gm.type !== 'final') { hw ? h.w++ : h.l++ }
@@ -310,27 +368,53 @@ export function simWeek(g: State) {
     if (gm.type === 'ccg') (hw ? h : a).confChamp = true
     if (gm.type === 'final') { const c = hw ? h : a; c.champ = true; g.champion = c.id }
     const im = INJ_MULT[settingsOf(g).injuries]
-    const hurtH = h.conf >= 0 ? applySnaps(h, hb, userHome, g.focus, im) : []
-    const hurtA = a.conf >= 0 ? applySnaps(a, ab, userAway, g.focus, im) : []
-    if (userHome) hurtH.forEach(x => g.news.unshift(x))
-    if (userAway) hurtA.forEach(x => g.news.unshift(x))
+    const hurtH = h.conf >= 0 ? applySnaps(h, hb, userHome, g.focus, im, userHome ? p => devBoost(g, p) : undefined) : []
+    const hurtA = a.conf >= 0 ? applySnaps(a, ab, userAway, g.focus, im, userAway ? p => devBoost(g, p) : undefined) : []
     if (isUser) {
-      const me = userHome ? h : a, opp = userHome ? a : h
-      const my = userHome ? hs : as, their = userHome ? as : hs
+      const opp = userHome ? a : h
+      const my = userHome ? hs : as, their = userHome ? as : hs, win = my > their
       const tag = gm.type === 'ccg' ? 'Conference title game: ' : gm.type === 'semi' ? 'Playoff semifinal: ' : gm.type === 'final' ? 'National title game: ' : ''
-      g.news.unshift(`Week ${g.week}. ${tag}${my > their ? 'Beat' : 'Lost to'} ${opp.school} ${my}-${their}.${gm.type === 'final' && my > their ? ' NATIONAL CHAMPIONS!' : ''}`)
-      void me
+      g.news.unshift(`Week ${g.week}. ${tag}${win ? 'Beat' : 'Lost to'} ${opp.school} ${my}-${their}.${gm.type === 'final' && win ? ' NATIONAL CHAMPIONS!' : ''}`)
+      building.result = { opp: opp.id, my, their, win, home: userHome, type: gm.type }
+      ;(userHome ? hurtH : hurtA).forEach(x => log(g, 'injury', x))
+      if (big) {
+        const d = depth(userHome ? h : a)
+        const stars = POSITIONS.flatMap(pos => d[pos].starters).filter(p => p.trait === 'Big-game')
+        if (stars.length) log(g, 'trait', `Big-game players stepped up: ${stars.map(p => `${p.pos} ${p.last}`).join(', ')}.`)
+      }
+      // game-day visits
+      const ranked = (oppRank.get(opp.id) ?? 99) <= TOP_N
+      for (const r of g.recruits) {
+        if (r.visitWeek !== g.week || r.committed !== null) continue
+        const delta = win ? (ranked ? 18 : 10) : -8
+        r.interest = Math.max(0, r.interest + delta)
+        log(g, 'visit', win
+          ? `${r.pos} ${r.first} ${r.last} loved the ${ranked ? 'win over a ranked team' : 'win'} on his visit (+${delta}).`
+          : `${r.pos} ${r.first} ${r.last} left his visit after the loss (${delta}).`)
+      }
+    } else if (big) {
+      const w = team(g, hs > as ? gm.home : gm.away), l = team(g, hs > as ? gm.away : gm.home)
+      const what = gm.type === 'ccg' ? `won the ${g.confNames[w.conf]} title` : gm.type === 'semi' ? 'advanced to the national title game' : 'won the national title'
+      log(g, 'league', `${w.school} ${what}, beating ${l.school} ${Math.max(hs, as)}-${Math.min(hs, as)}.`)
     }
   }
   if (g.week <= REGULAR_WEEKS) recruitingTick(g)
-  if (g.week === REGULAR_WEEKS) g.news.unshift('Regular season is over. Recruiting is closed until next season.')
+  if (g.week === REGULAR_WEEKS) log(g, 'info', 'Regular season is over. Recruiting is closed until next season.')
+  const goals = g.ad?.goals ?? []
+  // Only goals that can't be lost again once met. Rank and conference place move every week.
+  const locks = (x: Goal) => x.kind === 'wins' || x.kind === 'confWins' || x.kind === 'recruits' || (x.kind === 'conf' && x.target === 1)
+  goals.forEach((x, i) => { if (locks(x) && !goalsBefore[i] && goalProgress(g, x).done) log(g, 'goal', `AD goal met: ${x.text}.`) })
   g.week++
-  g.points = POINTS_PER_WEEK
+  g.points = weeklyPoints(g)
   g.rotation = 0
   // season over?
   if (g.week > 15 || (g.week === 14 && false)) g.phase = 'offseason'
   g.seed = getSeed()
   if (g.phase === 'offseason') openPortal(g)
+  building.rankAfter = rankAt(g, lastPlayedWeek(g)).find(r => r.team.id === g.user)!.rank
+  if (g.phase === 'offseason') building.lines.push({ kind: 'info', text: 'The season is over. The transfer portal is open until signing day.' })
+  g.recap = building
+  building = null
 }
 
 export function confStandings(g: State, conf: number) {
@@ -349,7 +433,7 @@ function addSemis(g: State) {
   champs.forEach(t => (t.playoff = true))
   g.schedule.push({ week: 14, home: champs[0].id, away: champs[3].id, type: 'semi', played: false })
   g.schedule.push({ week: 14, home: champs[1].id, away: champs[2].id, type: 'semi', played: false })
-  if (champs.some(t => t.id === g.user)) g.news.unshift('You made the playoff!')
+  if (champs.some(t => t.id === g.user)) log(g, 'info', 'You made the playoff!')
 }
 function addFinal(g: State) {
   const semis = g.schedule.filter(x => x.type === 'semi')
@@ -456,13 +540,21 @@ export function expectedShare(p: Player) {
   return e
 }
 /** Mood from this season's snaps against what he expected. It takes about 4 games to firm up. */
-export function morale(p: Player, games: number) {
+export function morale(p: Player, games: number, bonus = 0) {
   const expect = expectedShare(p)
   const share = games ? Math.min(1, p.snaps / (games * 60)) : 0
-  const score = clamp(Math.round(60 + (share - expect) * 100 * Math.min(1, games / 4)), 0, 100)
+  const score = clamp(Math.round(60 + (share - expect) * 100 * Math.min(1, games / 4) + bonus), 0, 100)
   const mood: Mood = score >= 70 ? 'Happy' : score >= 45 ? 'Content' : score >= 25 ? 'Unhappy' : 'Wants out'
   return { score, mood, share, expect }
 }
+
+/** Morale bonus from a Leader at his position and, on your team, your assistant coach. */
+export function moraleBonus(g: State, t: Team, p: Player) {
+  const leader = t.roster.some(x => x.id !== p.id && x.pos === p.pos && x.trait === 'Leader') ? 8 : 0
+  return leader + (t.id === g.user ? staffLevel(g, 'assistant') * 3 : 0)
+}
+/** Mood of a player on your team. */
+export function playerMorale(g: State, p: Player) { return morale(p, userGamesPlayed(g), moraleBonus(g, g.teams[g.user], p)) }
 
 // ---------- Transfer portal ----------
 export const PORTAL_POINTS = 100
@@ -510,7 +602,7 @@ export function openPortal(g: State) {
     }
     g.portal!.entries.push(e)
     e.interest = from === g.user
-      ? Math.round(morale(p, games).score / 2) + 5
+      ? Math.round(morale(p, games, moraleBonus(g, me, p)).score / 2) + 5
       : 5 + (wouldStart(g, e) ? 15 : 0) + rankBonus + Math.round(me.prestige * 2) + ri(0, 8)
   }
   for (const t of g.teams) {
@@ -519,10 +611,10 @@ export function openPortal(g: State) {
     for (const p of t.roster) {
       if (p.year >= 4) continue
       if (t.id === g.user) {
-        const m = morale(p, games)
-        if (rnd() < PORTAL_ENTER[m.mood]) add(p, t.id, m.mood === 'Wants out' ? 'Wants to play' : 'Unhappy with playing time')
+        const m = morale(p, games, moraleBonus(g, t, p))
+        if (rnd() < PORTAL_ENTER[m.mood] + (p.trait === 'Homesick' ? 0.2 : 0)) add(p, t.id, m.mood === 'Wants out' ? 'Wants to play' : 'Unhappy with playing time')
       } else if (!starters.has(p.id)) {
-        if (!p.walkOn && rnd() < clamp(0.1 + (p.stars - 2) * 0.06, 0.03, 0.3)) add(p, t.id, 'Looking for playing time')
+        if (!p.walkOn && rnd() < clamp(0.1 + (p.stars - 2) * 0.06, 0.03, 0.3) + (p.trait === 'Homesick' ? 0.1 : 0)) add(p, t.id, 'Looking for playing time')
       } else if (t.prestige < 4.5 && p.ovr >= 68 && rnd() < 0.2) {
         add(p, t.id, 'Moving up to a bigger program')
       }
@@ -537,7 +629,7 @@ export function openPortal(g: State) {
 export function expectedPortalGain(g: State, e: PortalEntry, action: 'pitch' | 'visit') {
   const base = action === 'visit' ? 30 : 10
   const resist = Math.max(0.6, 1 + (e.p.stars - g.teams[g.user].prestige / 2) * 0.15)
-  return base * prestigeFactor(g) * (wouldStart(g, e) ? 1.25 : 1) * DIFF_MULT[settingsOf(g).difficulty] / resist
+  return base * prestigeFactor(g) * (wouldStart(g, e) ? 1.25 : 1) * DIFF_MULT[settingsOf(g).difficulty] * recruitBoost(g) / resist
 }
 export const portalOffers = (g: State) => portalEntries(g).filter(e => e.offered && e.to === null && e.from !== g.user).length
 export const portalSigned = (g: State) => portalIncoming(g).length
@@ -612,7 +704,7 @@ export function expectedGain(g: State, r: Recruit, action: 'contact' | 'visit') 
   const needBoost = rosterNeeds(g).need[r.pos] > 0 ? 1.2 : 1
   const base = action === 'visit' ? 30 : 10
   const resist = Math.max(0.6, 1 + (r.stars - g.teams[g.user].prestige / 2) * 0.15)
-  return base * prestigeFactor(g) * needBoost * DIFF_MULT[settingsOf(g).difficulty] / resist
+  return base * prestigeFactor(g) * needBoost * DIFF_MULT[settingsOf(g).difficulty] * recruitBoost(g) / resist
 }
 export function recruitAction(g: State, r: Recruit, action: 'contact' | 'scout' | 'visit' | 'offer') {
   if (r.committed !== null || g.phase !== 'season' || g.week > REGULAR_WEEKS) return 'Recruiting is closed.'
@@ -626,7 +718,13 @@ export function recruitAction(g: State, r: Recruit, action: 'contact' | 'scout' 
     const cost = COST[action]
     if (g.points < cost) return 'Not enough recruiting points this week.'
     if (action === 'scout') { if (r.scouted) return 'Already scouted.'; r.scouted = true }
-    if (action === 'visit') { if (r.visited) return 'He already visited.'; if (r.interest < 30) return 'He needs 30 interest before he will visit.'; r.visited = true }
+    if (action === 'visit') {
+      if (r.visited) return 'He already visited.'
+      if (r.interest < 30) return 'He needs 30 interest before he will visit.'
+      r.visited = true
+      const gm = userNextGame(g)
+      if (gm && gm.home === g.user) { r.visitWeek = g.week; msg = `${r.first} ${r.last} will be at the home game against ${team(g, gm.away).school}. A win helps.` }
+    }
     g.points -= cost
     if (action !== 'scout') r.interest = Math.round(r.interest + expectedGain(g, r, action) * (0.8 + rnd() * 0.4))
   }
@@ -637,7 +735,7 @@ export function recruitAction(g: State, r: Recruit, action: 'contact' | 'scout' 
 function checkCommit(g: State, r: Recruit) {
   if (r.committed === null && r.offered && r.interest >= r.rival && rosterNeeds(g).open > 0) {
     r.committed = g.user
-    g.news.unshift(`COMMIT: ${'★'.repeat(r.stars)} ${r.pos} ${r.first} ${r.last} committed to you!`)
+    log(g, 'commit', `COMMIT: ${'★'.repeat(r.stars)} ${r.pos} ${r.first} ${r.last} committed to you!`)
   }
 }
 function recruitingTick(g: State) {
@@ -649,7 +747,7 @@ function recruitingTick(g: State) {
     r.rival += ri(0, 2)
     if (rnd() < 0.02 + late * 0.06 + r.stars * 0.005) {
       r.committed = r.rivalTeam
-      if (r.offered || r.interest > 25) g.news.unshift(`Lost ${r.first} ${r.last} (${r.stars}★ ${r.pos}) to ${g.teams[r.rivalTeam].school}.`)
+      if (r.offered || r.interest > 25) log(g, 'lost', `Lost ${r.first} ${r.last} (${r.stars}★ ${r.pos}) to ${g.teams[r.rivalTeam].school}.`)
     }
   }
 }
@@ -716,13 +814,22 @@ export function advanceOffseason(g: State) {
     graduated: [], signed: [], cut: [], walkOns: 0, bigJumps: [],
   }
   g.history.unshift({ year: g.year, record: report.record, finish: report.finish, prestige: Math.round(me.prestige * 10) / 10 })
+  ensureProgram(g)
+  const ad = g.ad!
+  const results = ad.goals.map(x => ({ x, done: goalProgress(g, x).done }))
+  const met = results.filter(r => r.done).length
   // prestige drift
   for (const t of g.teams) {
     const pct = t.w / Math.max(1, t.w + t.l)
     const target = 1 + pct * 7.5 + (t.confChamp ? 0.8 : 0) + (t.playoff ? 0.6 : 0) + (t.champ ? 1.2 : 0)
     t.prestige = clamp(Math.round((t.prestige + (target - t.prestige) * 0.22) * 10) / 10, 1, 10)
   }
+  me.prestige = clamp(Math.round((me.prestige + met * AD_PRESTIGE) * 10) / 10, 1, 10)
   report.prestigeAfter = me.prestige
+  ad.strikes = met >= AD_GOALS_TO_PASS ? 0 : ad.strikes + 1
+  ad.bonus = met * AD_POINTS
+  const fired = ad.strikes >= AD_STRIKES
+  report.ad = { met, total: results.length, strikes: ad.strikes, fired, lines: results.map(r => `${r.done ? 'Met' : 'Missed'}: ${r.x.text}`) }
   resolvePortal(g, report)
   // graduation and progression
   for (const t of g.teams) {
@@ -732,7 +839,8 @@ export function advanceOffseason(g: State) {
     for (const p of t.roster) {
       const before = p.ovr
       const snapBonus = Math.min(3, p.snaps / 250)
-      p.ovr = Math.min(p.pot, Math.round(p.ovr + (p.pot - p.ovr) * 0.28 * DEV_MULT[p.dev] + snapBonus + ri(0, 2)))
+      const mult = t.id === g.user ? devBoost(g, p) : 1
+      p.ovr = Math.min(p.pot, Math.round(p.ovr + (p.pot - p.ovr) * 0.28 * DEV_MULT[p.dev] * mult + snapBonus + ri(0, 2) + (p.trait === 'Gym rat' ? 1 : 0)))
       p.year++; p.snaps = 0
       if (t.id === g.user && p.ovr - before >= 8) report.bigJumps.push(`${p.pos} ${p.first} ${p.last} +${Math.round(p.ovr - before)} (now ${p.ovr})`)
     }
@@ -742,7 +850,7 @@ export function advanceOffseason(g: State) {
     if (r.committed === null) r.committed = r.rivalTeam
     const t = g.teams[r.committed]
     if (t.roster.length >= ROSTER_MAX && t.id !== g.user) continue
-    t.roster.push({ id: r.id, first: r.first, last: r.last, pos: r.pos, year: 1, ovr: r.ovr, pot: r.pot, dev: r.dev, stars: r.stars, snaps: 0 })
+    t.roster.push({ id: r.id, first: r.first, last: r.last, pos: r.pos, year: 1, ovr: r.ovr, pot: r.pot, dev: r.dev, stars: r.stars, snaps: 0, ...(r.trait ? { trait: r.trait } : {}) })
     if (t.id === g.user) report.signed.push(`${'★'.repeat(r.stars)} ${r.pos} ${r.first} ${r.last}`)
   }
   for (const t of g.teams) {
@@ -755,11 +863,132 @@ export function advanceOffseason(g: State) {
   g.year++; g.week = 1; g.phase = 'season'; g.champion = null; g.focus = []; g.rotation = 0
   g.schedule = makeSchedule(g)
   g.recruits = makeRecruits(g)
-  g.points = POINTS_PER_WEEK
+  g.staffMarket = makeMarket(g)
+  ad.goals = makeGoals(g)
+  if (fired) {
+    const offers = g.teams.filter(t => t.id !== g.user && t.prestige <= 4.5).sort(() => rnd() - 0.5).slice(0, 3).map(t => t.id)
+    g.fired = { offers: offers.length ? offers : [g.teams.filter(t => t.id !== g.user).sort((a, b) => a.prestige - b.prestige)[0].id] }
+  }
+  g.points = weeklyPoints(g)
   g.report = report
   g.portal = null
   g.news = [`The ${g.year} season begins. Prestige is now ${me.prestige.toFixed(1)}.`, ...g.news].slice(0, 60)
   g.seed = getSeed()
+}
+
+// ---------- Coaching staff ----------
+export type Role = 'assistant' | 'oc' | 'dc'
+export const ROLES: Record<Role, { title: string; short: string; does: string }> = {
+  assistant: { title: 'Assistant coach', short: 'Assistant', does: '+6% recruiting and portal interest, +3 morale for every player and kicker growth, per star' },
+  oc: { title: 'Offensive coordinator', short: 'OC', does: '+0.8 offense on game day and +8% growth for QB, RB, TE and WR, per star' },
+  dc: { title: 'Defensive coordinator', short: 'DC', does: '+0.8 defense on game day and +8% growth for DL, LB and DB, per star' },
+}
+const ROLE_LIST: Role[] = ['assistant', 'oc', 'dc']
+export interface Coach { id: number; first: string; last: string; role: Role; level: number; salary: number }
+/** Salary in $M by star level. */
+const SALARY = [0, 0.4, 0.8, 1.4, 2.2, 3.2]
+const OFFENSE: Pos[] = ['QB', 'RB', 'TE', 'WR']
+const coachFor = (pos: Pos): Role => pos === 'K' ? 'assistant' : OFFENSE.includes(pos) ? 'oc' : 'dc'
+function makeCoach(g: State, role: Role, level: number): Coach {
+  return { id: newId(g), first: pick(FIRST), last: pick(LAST), role, level, salary: SALARY[level] }
+}
+function makeMarket(g: State): Coach[] {
+  return ROLE_LIST.flatMap(role => [0, 1, 2].map(() => makeCoach(g, role, pick([1, 2, 2, 2, 3, 3, 3, 4, 4, 5])))).sort((a, b) => b.level - a.level)
+}
+export const staffBudget = (g: State) => Math.round((0.6 + g.teams[g.user].prestige * 0.6) * 10) / 10
+export const payroll = (g: State) => Math.round((g.staff ?? []).reduce((s, c) => s + c.salary, 0) * 10) / 10
+export const staffLevel = (g: State, role: Role) => g.staff?.find(c => c.role === role)?.level ?? 0
+const recruitBoost = (g: State) => 1 + staffLevel(g, 'assistant') * 0.06
+function devBoost(g: State, p: Player) { return 1 + staffLevel(g, coachFor(p.pos)) * 0.08 }
+/** Coordinators on your team, and Big-game starters in title and playoff games. */
+export function gameDayBoost(g: State, t: Team, big = false) {
+  const b = { off: 0, def: 0 }
+  if (t.id === g.user) { b.off += staffLevel(g, 'oc') * 0.8; b.def += staffLevel(g, 'dc') * 0.8 }
+  if (big && t.conf >= 0) {
+    const d = depth(t)
+    for (const pos of POSITIONS) for (const p of d[pos].starters) if (p.trait === 'Big-game') OFFENSE.includes(pos) || pos === 'K' ? (b.off += 1) : (b.def += 1)
+  }
+  return b
+}
+/** You can hire in the offseason and before week 1 is played. */
+export function canHire(g: State) { return g.phase === 'offseason' || (g.week === 1 && userGamesPlayed(g) === 0) }
+export function hireCoach(g: State, id: number) {
+  ensureProgram(g)
+  if (!canHire(g)) return 'You can only hire in the offseason or before week 1.'
+  const c = g.staffMarket!.find(x => x.id === id)
+  if (!c) return ''
+  const cur = g.staff!.find(x => x.role === c.role)
+  const after = payroll(g) - (cur?.salary ?? 0) + c.salary
+  if (after > staffBudget(g) + 1e-9) return `That puts you over your $${staffBudget(g).toFixed(1)}M staff budget.`
+  g.staff = [...g.staff!.filter(x => x.role !== c.role), c].sort((a, b) => ROLE_LIST.indexOf(a.role) - ROLE_LIST.indexOf(b.role))
+  g.staffMarket = g.staffMarket!.filter(x => x.id !== id)
+  if (cur) g.staffMarket.push(cur)
+  g.news.unshift(`Hired ${c.first} ${c.last} as ${ROLES[c.role].title.toLowerCase()}.`)
+  return `Hired ${c.first} ${c.last}.`
+}
+
+// ---------- Athletic director ----------
+export type GoalKind = 'wins' | 'conf' | 'confWins' | 'rank' | 'recruits'
+export interface Goal { kind: GoalKind; target: number; text: string }
+export interface AD { goals: Goal[]; strikes: number; bonus: number }
+export const AD_STRIKES = 3
+export const AD_GOALS_TO_PASS = 2
+export const AD_PRESTIGE = 0.15
+export const AD_POINTS = 10
+function makeGoals(g: State): Goal[] {
+  const me = g.teams[g.user], pr = me.prestige, conf = g.confNames[me.conf]
+  const wins = clamp(Math.round(1.5 + pr * 0.85), 3, 10)
+  const recruits = clamp(Math.round(pr / 2.5), 1, 4)
+  const goals: Goal[] = [{ kind: 'wins', target: wins, text: `Win ${wins} regular-season games` }]
+  const rankTarget = pr >= 8 ? 5 : pr >= 6.5 ? 10 : pr >= 5 ? 15 : 0
+  if (rankTarget) goals.push({ kind: 'rank', target: rankTarget, text: `Finish in the top ${rankTarget}` })
+  else { const cw = pr >= 3.5 ? 4 : pr >= 2 ? 3 : 2; goals.push({ kind: 'confWins', target: cw, text: `Win ${cw} ${conf} games` }) }
+  if (pr >= 7) goals.push({ kind: 'conf', target: 1, text: `Win the ${conf}` })
+  else goals.push({ kind: 'recruits', target: recruits, text: `Sign ${recruits} recruit${recruits > 1 ? 's' : ''} rated 3★ or better` })
+  return goals
+}
+/** Where a goal stands right now. `done` is final once the season is over. */
+export function goalProgress(g: State, x: Goal): { done: boolean; now: string } {
+  const me = g.teams[g.user]
+  if (x.kind === 'wins') return { done: me.w >= x.target, now: `${me.w} of ${x.target} wins` }
+  if (x.kind === 'confWins') return { done: me.cw >= x.target, now: `${me.cw} of ${x.target} conference wins` }
+  if (x.kind === 'recruits') {
+    const n = g.recruits.filter(r => r.committed === g.user && r.stars >= 3).length
+    return { done: n >= x.target, now: `${n} of ${x.target} signed` }
+  }
+  if (x.kind === 'rank') {
+    const r = rankAt(g, lastPlayedWeek(g)).find(r => r.team.id === g.user)!.rank
+    return { done: r <= x.target, now: `Ranked #${r}` }
+  }
+  const place = me.confChamp ? 1 : confStandings(g, me.conf).indexOf(me) + 1
+  return { done: x.target === 1 ? !!me.confChamp : place <= x.target, now: me.confChamp ? 'Conference champions' : `${place}${['st', 'nd', 'rd'][place - 1] ?? 'th'} in the conference` }
+}
+export const weeklyPoints = (g: State) => POINTS_PER_WEEK + (g.ad?.bonus ?? 0)
+/** Gives older saves a staff, a hiring market and AD goals. */
+export function ensureProgram(g: State) {
+  if (g.staff && g.staffMarket && g.ad) return
+  const seeded = getSeed()
+  setSeed(g.seed)
+  if (!g.staff) g.staff = ROLE_LIST.map(r => makeCoach(g, r, 1))
+  if (!g.staffMarket) g.staffMarket = makeMarket(g)
+  if (!g.ad) g.ad = { goals: makeGoals(g), strikes: 0, bonus: 0 }
+  g.seed = getSeed()
+  setSeed(seeded)
+}
+/** After a firing: take over at one of the schools that offered. */
+export function takeJob(g: State, id: number) {
+  if (!g.fired?.offers.includes(id)) return
+  const old = g.teams[g.user]
+  g.user = id
+  g.fired = null; g.focus = []; g.rotation = 0; g.portal = null
+  setSeed(g.seed)
+  g.staff = ROLE_LIST.map(r => makeCoach(g, r, 1))
+  g.staffMarket = makeMarket(g)
+  g.ad = { goals: makeGoals(g), strikes: 0, bonus: 0 }
+  for (const r of g.recruits) { r.offered = false; r.visited = false; r.scouted = false; r.visitWeek = undefined; if (r.committed === old.id) r.committed = null }
+  g.points = weeklyPoints(g)
+  g.seed = getSeed()
+  g.news.unshift(`Fired by ${old.school}. You are the new head coach at ${g.teams[id].school}.`)
 }
 
 export const grade = (n: number) => n >= 90 ? 'A+' : n >= 85 ? 'A' : n >= 80 ? 'A-' : n >= 76 ? 'B+' : n >= 72 ? 'B' : n >= 68 ? 'B-' : n >= 64 ? 'C+' : n >= 60 ? 'C' : n >= 55 ? 'C-' : n >= 50 ? 'D' : 'F'

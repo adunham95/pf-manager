@@ -246,6 +246,46 @@ tr.me td { background: color-mix(in srgb, var(--blue) 9%, transparent); font-wei
 .commit .rstat { margin-left: 2px; }
 .commit.behind, .commit.cold, .commit.ready, .commit.lead { background: var(--soft); }
 
+/* traits, staff, AD, recap */
+.trait { color: var(--win); font-weight: 600; }
+.trait.bad { color: var(--hot); }
+.traitbox { display: grid; gap: 2px; padding: 10px 12px; border-radius: 10px; font-size: 14px;
+  background: color-mix(in srgb, var(--win) 10%, transparent); border-left: 3px solid var(--win); }
+.traitbox.bad { background: color-mix(in srgb, var(--hot) 10%, transparent); border-left-color: var(--hot); }
+.visitnote { color: var(--blue) !important; font-weight: 600; }
+.cardhead0 { display: flex; align-items: baseline; justify-content: space-between; }
+.adgoal { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); }
+.adgoal .check { display: grid; place-items: center; width: 26px; height: 26px; flex: none; border-radius: 50%; border: 2px solid var(--line); color: #fff; font-weight: 800; font-size: 14px; }
+.adgoal.done .check { background: var(--win); border-color: var(--win); }
+.hotseat { display: flex; align-items: center; gap: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+.pips { display: flex; gap: 4px; }
+.pips i { width: 22px; height: 8px; border-radius: 4px; background: var(--line); }
+.pips i.on { background: var(--hot); }
+.small.hot, span.hot { color: var(--hot); font-weight: 700; }
+.pad0 { padding: 10px 16px 0; }
+.coach { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-top: 1px solid var(--line); }
+.coach .role { display: inline-grid; place-items: center; min-width: 74px; height: 26px; padding: 0 8px; border-radius: 6px; font-size: 12px; font-weight: 700; background: var(--soft); color: var(--muted); }
+.coach .salary { font-variant-numeric: tabular-nums; font-weight: 600; color: var(--muted); font-size: 14px; }
+.roledoes { margin: -4px 0 0; padding: 0 16px 10px 102px; }
+.adbox { padding: 12px; margin: 12px 0; border-radius: 10px; background: color-mix(in srgb, var(--win) 10%, transparent); display: grid; gap: 2px; }
+.adbox.bad { background: color-mix(in srgb, var(--hot) 10%, transparent); }
+.recap { width: min(540px, 100%) !important; }
+.recap-score { display: flex; align-items: center; gap: 12px; margin: 10px 0 2px; }
+.recap-score b { font-family: 'Barlow Condensed', sans-serif; font-size: 52px; line-height: 1; }
+.recap-score .dash { color: var(--muted); font-size: 28px; }
+.recap-score.win b:first-of-type { color: var(--win); }
+.recap-score:not(.win) b:first-of-type { color: var(--hot); }
+.recap-rank { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 10px; background: var(--soft); font-size: 14px; }
+.recap-rank b { font-family: 'Barlow Condensed', sans-serif; font-size: 22px; }
+.recap-rank .mv { width: auto; font-size: 14px; }
+.recap-lines { list-style: none; padding: 0; margin: 12px 0 0; display: grid; gap: 6px; }
+.recap-lines li { display: flex; gap: 10px; align-items: baseline; font-size: 15px; padding: 8px 10px; border-radius: 8px; background: var(--soft); }
+.recap-lines .ico { width: 18px; flex: none; text-align: center; font-weight: 800; }
+.recap-lines .commit .ico, .recap-lines .goal .ico { color: var(--win); }
+.recap-lines .lost .ico, .recap-lines .injury .ico { color: var(--hot); }
+.recap-lines .visit .ico { color: var(--blue); }
+.recap-lines .trait .ico { color: #f5a524; }
+
 /* rankings */
 .ranklayout { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 4fr); gap: 16px; align-items: start; margin-bottom: 16px; }
 .rk { color: var(--muted); font-weight: 600; font-size: .85em; }
@@ -324,6 +364,8 @@ input[type=color] { width: 36px; height: 32px; border: 1px solid var(--line); bo
   .teambar .stat b { font-size: 22px; }
   table { font-size: 13px; }
   .rmini { width: 96px; }
+  .roledoes { padding-left: 16px; }
+  .coach .role { min-width: 0; }
   .hide-sm { display: none; }
   .rrow { padding: 9px 12px; }
   .rtools { padding: 12px; }

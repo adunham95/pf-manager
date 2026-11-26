@@ -7,7 +7,7 @@
     try { const raw = localStorage.getItem(KEY); return raw ? JSON.parse(raw) : null } catch { return null }
   }
   let g = $state<State | null>(load())
-  type Tab = 'team' | 'recruits' | 'portal' | 'schedule' | 'league' | 'history' | 'settings'
+  type Tab = 'team' | 'recruits' | 'portal' | 'program' | 'schedule' | 'league' | 'history' | 'settings'
   let tab = $state<Tab>('team')
   let toast = $state('')
   let posFilter = $state<'ALL' | Pos>('ALL')
@@ -94,7 +94,11 @@
   const d = $derived(me ? G.depth(me) : null)
   const myR = $derived(me && g ? G.teamRatings(me, next ? g.rotation : 0) : null)
   const oppR = $derived(opp ? G.teamRatings(opp, 0) : null)
-  const prob = $derived(myR && oppR ? G.winProb(myR.ovr + (next?.home === g?.user ? 1 : -1), oppR.ovr) : 0.5)
+  const bigGame = $derived(!!next && (next.type === 'ccg' || next.type === 'semi' || next.type === 'final'))
+  const boostOf = (t: G.Team) => { const b = G.gameDayBoost(g!, t, bigGame); return (b.off + b.def) / 2 }
+  const myOvr = $derived(me && myR ? myR.ovr + boostOf(me) : 0)
+  const oppOvr = $derived(opp && oppR ? oppR.ovr + boostOf(opp) : 0)
+  const prob = $derived(myR && oppR ? G.winProb(myOvr + (next?.home === g?.user ? 1 : -1), oppOvr) : 0.5)
   const offers = $derived(g ? g.recruits.filter(r => r.offered && r.committed === null).length : 0)
   const recruitingOpen = $derived(!!g && g.phase === 'season' && g.week <= G.REGULAR_WEEKS)
   const weekLabel = $derived(!g ? '' : g.phase === 'offseason' ? 'Offseason'
@@ -156,7 +160,7 @@
   }
   // playing time
   const games = $derived(g ? G.userGamesPlayed(g) : 0)
-  const moods = $derived(me ? me.roster.filter(p => p.year < 4).map(p => ({ p, m: G.morale(p, games) })).sort((a, b) => a.m.score - b.m.score) : [])
+  const moods = $derived(me ? me.roster.filter(p => p.year < 4).map(p => ({ p, m: G.playerMorale(g!, p) })).sort((a, b) => a.m.score - b.m.score) : [])
   const moodOf = $derived(new Map(moods.map(x => [x.p.id, x.m])))
   const atRisk = $derived(moods.filter(x => x.m.mood === 'Unhappy' || x.m.mood === 'Wants out').length)
   const pct = (n: number) => `${Math.round(n * 100)}%`
@@ -167,6 +171,12 @@
   let pPos = $state<'ALL' | Pos>('ALL')
   let pSelId = $state<number | null>(null)
   $effect(() => { if (g && g.phase === 'offseason' && !g.portal && !g.report) G.openPortal(g) })
+  $effect(() => { if (g && (!g.staff || !g.staffMarket || !g.ad)) G.ensureProgram(g) })
+  const budget = $derived(g ? G.staffBudget(g) : 0)
+  const pay = $derived(g ? G.payroll(g) : 0)
+  function hire(id: number) { if (g) flash(G.hireCoach(g, id)) }
+  const RECAP_ICON: Record<G.RecapKind, string> = { injury: '✚', commit: '★', lost: '✕', visit: '⌂', goal: '✓', league: '🏆', trait: '⚡', info: '•' }
+  const traitTag = (t?: G.Trait) => t ? G.TRAITS[t] : null
   const portal = $derived(g?.portal ?? null)
   const myEntries = $derived(portal ? portal.entries.filter(e => e.from === g!.user) : [])
   const pList = $derived(!portal ? [] : portal.entries.filter(e =>
@@ -234,7 +244,7 @@
     <span class="avatar" style="--c:{me?.color}">{initials(p)}</span>
     <button class="who linkish" onclick={() => (playerSel = playerSel === p.id ? null : p.id)} aria-expanded={playerSel === p.id}>
       <div class="pname">{p.first[0]}. {p.last} {#if p.lock}<span class="tag">Set</span>{/if}</div>
-      <div class="psub">{G.YEARS[p.year]} · <span class="dev {p.dev}">{p.dev} dev</span> · {p.snaps} snaps{#if p.walkOn} · walk-on{/if}</div>
+      <div class="psub">{G.YEARS[p.year]} · <span class="dev {p.dev}">{p.dev} dev</span>{#if p.trait}{' · '}<span class="trait" class:bad={!G.TRAITS[p.trait].good}>{p.trait}</span>{/if} · {p.snaps} snaps{#if p.walkOn} · walk-on{/if}</div>
     </button>
     <div class="tags">
       {#if p.inj}<span class="tag out">Out {p.inj}w</span>{/if}
@@ -258,8 +268,26 @@
   {#if playerSel === p.id}<div class="rinline">{@render playerCard(p, isStarter)}</div>{/if}
 {/snippet}
 
+{#snippet traitBox(t: G.Trait)}
+  <div class="traitbox" class:bad={!G.TRAITS[t].good}><b>{t}</b><span>{G.TRAITS[t].text}</span></div>
+{/snippet}
+
+{#snippet coachRow(c: G.Coach, hireable: boolean)}
+  {@const cur = g!.staff?.find(x => x.role === c.role)}
+  {@const after = Math.round((pay - (cur?.salary ?? 0) + c.salary) * 10) / 10}
+  <div class="coach">
+    <span class="role">{G.ROLES[c.role].short}</span>
+    <div class="grow"><b>{c.first} {c.last}</b><div class="stars">{starStr(c.level)}</div></div>
+    <span class="salary">${c.salary.toFixed(1)}M</span>
+    {#if hireable}
+      <button class="btn sm" class:primary={c.level > (cur?.level ?? 0)} disabled={!G.canHire(g!) || after > budget + 1e-9} onclick={() => hire(c.id)}
+        title={after > budget + 1e-9 ? 'Over budget' : ''}>{c.level > (cur?.level ?? 0) ? 'Upgrade' : 'Hire'}</button>
+    {/if}
+  </div>
+{/snippet}
+
 {#snippet playerCard(p: Player, isStarter: boolean)}
-  {@const m = G.morale(p, games)}
+  {@const m = G.playerMorale(g!, p)}
   <div class="rdetail">
     <div class="rd-head">
       <span class="pill big {p.pos}">{p.pos}</span>
@@ -282,6 +310,7 @@
       <div><b>{G.grade(p.pot)}</b><small>Potential ({p.pot})</small></div>
       <div><b class="dev {p.dev}">{p.dev}</b><small>Dev trait</small></div>
     </div>
+    {#if p.trait}{@render traitBox(p.trait)}{/if}
     <div>
       <div class="race-top small"><span class="muted">Room to grow</span><b>{Math.max(0, Math.round(p.pot - p.ovr))}</b></div>
       <span class="meter wide"><i style="width:{Math.min(100, p.ovr / Math.max(p.pot, 1) * 100)}%"></i></span>
@@ -340,6 +369,7 @@
       <div><b>{G.grade(e.p.pot)}</b><small>Potential</small></div>
       <div><b class="dev {e.p.dev}">{e.p.dev}</b><small>Dev trait</small></div>
     </div>
+    {#if e.p.trait}{@render traitBox(e.p.trait)}{/if}
     <div class="race">
       <div class="race-top">
         <span class="you">{me?.abbr} <b>{e.interest}</b></span>
@@ -390,7 +420,9 @@
       <div><b>{r.scouted ? G.grade(r.pot) : '?'}</b><small>Potential</small></div>
       <div><b class={r.scouted ? `dev ${r.dev}` : ''}>{r.scouted ? r.dev : '?'}</b><small>Dev trait</small></div>
     </div>
-    {#if !r.scouted}<p class="muted small">Not scouted. OVR is a range based on stars.</p>{/if}
+    {#if !r.scouted}<p class="muted small">Not scouted. OVR is a range based on stars, and his trait is hidden.</p>
+    {:else if r.trait}{@render traitBox(r.trait)}{/if}
+    {#if r.visitWeek === g!.week && g!.phase === 'season' && r.committed === null}<div class="tag ok startstag">Visiting for this week's home game</div>{/if}
 
     <div class="race">
       <div class="race-top">
@@ -416,6 +448,7 @@
         <button class="atile" onclick={() => act(r, 'visit')} disabled={r.visited || r.interest < 30 || g!.points < G.COST.visit}>
           <b>Campus visit</b>
           <small>{r.visited ? 'Already visited' : r.interest < 30 ? `Needs 30 interest (${r.interest})` : `${G.COST.visit} pts · ${gainStr(r, 'visit')}`}</small>
+          {#if !r.visited && r.interest >= 30}<small class="visitnote">{next && next.home === g!.user ? `Home vs ${G.team(g!, next.away).school}: a win adds ${rk(next.away) ? 18 : 10}, a loss costs 8` : 'Away week: a quiet visit, no game-day bonus'}</small>{/if}
         </button>
         <button class="atile" onclick={() => act(r, 'scout')} disabled={r.scouted || g!.points < G.COST.scout}>
           <b>Scout</b><small>{r.scouted ? 'Scouted' : `${G.COST.scout} pts · reveals ratings`}</small>
@@ -450,7 +483,7 @@
   <header class="top">
     <div class="brand">PIXEL <b>FOOTBALL</b></div>
     <nav class="tabs">
-      {#each [['team', 'My Team'], ['recruits', 'Recruits'], ['portal', 'Portal'], ['schedule', 'Schedule'], ['league', 'League'], ['history', 'History'], ['settings', 'Settings']] as [k, l]}
+      {#each [['team', 'My Team'], ['recruits', 'Recruits'], ['portal', 'Portal'], ['program', 'Program'], ['schedule', 'Schedule'], ['league', 'League'], ['history', 'History'], ['settings', 'Settings']] as [k, l]}
         <button class:on={tab === k} onclick={() => (tab = k as Tab)}>{l}</button>
       {/each}
     </nav>
@@ -499,7 +532,7 @@
                   <div class="muted">{me.w}-{me.l}</div>
                 </div>
                 <div class="nums">
-                  <b>{Math.round(myR.ovr)}</b><span>vs</span><b class="them">{Math.round(oppR.ovr)}</b>
+                  <b>{Math.round(myOvr)}</b><span>vs</span><b class="them">{Math.round(oppOvr)}</b>
                   <small>Team rating</small>
                 </div>
                 <div class="side">
@@ -564,7 +597,7 @@
     {:else if tab === 'recruits'}
       <section class="card rhq">
         <div class="rhq-stats">
-          <div class="stat"><b>{recruitingOpen ? g.points : 0}<small>/{G.POINTS_PER_WEEK}</small></b><small>Points this week</small><span class="meter"><i style="width:{recruitingOpen ? g.points / G.POINTS_PER_WEEK * 100 : 0}%"></i></span></div>
+          <div class="stat"><b>{recruitingOpen ? g.points : 0}<small>/{G.weeklyPoints(g)}</small></b><small>Points this week</small><span class="meter"><i style="width:{recruitingOpen ? g.points / G.weeklyPoints(g) * 100 : 0}%"></i></span></div>
           <div class="stat"><b>{offers}<small>/{G.MAX_OFFERS}</small></b><small>Open offers</small><span class="meter"><i style="width:{offers / G.MAX_OFFERS * 100}%"></i></span></div>
           <div class="stat"><b>{needs.commits}</b><small>Commits</small></div>
           <div class="stat"><b class:hot={needs.open <= 0}>{needs.open}</b><small>Open spots</small></div>
@@ -713,6 +746,45 @@
           </aside>
         </div>
       {/if}
+
+    {:else if tab === 'program' && g.ad && g.staff && g.staffMarket}
+      {@const ad = g.ad}
+      <div class="layout">
+        <div class="col">
+          <section class="card rhq">
+            <div class="cardhead0"><h3>Athletic director</h3><span class="muted small">{g.year} goals</span></div>
+            {#each ad.goals as goal}
+              {@const pr = G.goalProgress(g, goal)}
+              <div class="adgoal" class:done={pr.done}>
+                <span class="check">{pr.done ? '✓' : ''}</span>
+                <div class="grow"><b>{goal.text}</b><div class="muted small">{pr.now}</div></div>
+                <span class="rstat {pr.done ? 'lead' : 'cold'}">{pr.done ? (g.phase === 'offseason' ? 'Met' : 'On track') : g.phase === 'offseason' ? 'Missed' : 'Not yet'}</span>
+              </div>
+            {/each}
+            <div class="hotseat">
+              <span class="muted small">Hot seat</span>
+              <span class="pips">{#each Array(G.AD_STRIKES) as _, i}<i class:on={i < ad.strikes}></i>{/each}</span>
+              <span class="small">{ad.strikes === 0 ? 'Safe' : ad.strikes === G.AD_STRIKES - 1 ? 'One more bad season and you are fired' : `${ad.strikes} strike${ad.strikes > 1 ? 's' : ''}`}</span>
+            </div>
+            <p class="muted small">Each goal met adds {G.AD_PRESTIGE} prestige and {G.AD_POINTS} recruiting points a week next season{ad.bonus ? ` (this season: +${ad.bonus})` : ''}. Meet fewer than {G.AD_GOALS_TO_PASS} and you get a strike. {G.AD_STRIKES} strikes in a row and you're fired.</p>
+          </section>
+        </div>
+        <div class="col">
+          <section class="card flush">
+            <div class="cardhead"><h3>Coaching staff</h3>
+              <span class="small" class:hot={pay > budget}>${pay.toFixed(1)}M of ${budget.toFixed(1)}M</span></div>
+            <div class="pad0"><span class="meter wide"><i style="width:{Math.min(100, pay / budget * 100)}%"></i></span></div>
+            {#each g.staff as c}
+              {@render coachRow(c, false)}
+              <p class="muted small roledoes">{G.ROLES[c.role].does}.</p>
+            {/each}
+            <div class="cardhead sub"><h3>Coaches available</h3>
+              <span class="muted small">{G.canHire(g) ? 'Hiring is open' : 'Hiring opens after the season'}</span></div>
+            {#each g.staffMarket as c (c.id)}{@render coachRow(c, true)}{/each}
+            <p class="muted small pad">Your budget grows with prestige. Hiring replaces the coach in that role, and he goes back on the market. New coaches show up every offseason.</p>
+          </section>
+        </div>
+      </div>
 
     {:else if tab === 'schedule'}
       <section class="card flush">
@@ -887,8 +959,64 @@
           {/if}
           <div><h4>Big jumps</h4>{#each r.bigJumps as x}<div>{x}</div>{:else}<div class="muted">No big jumps</div>{/each}</div>
         </div>
+        {#if r.ad}
+          <div class="adbox" class:bad={r.ad.met < G.AD_GOALS_TO_PASS}>
+            <b>Athletic director: {r.ad.met} of {r.ad.total} goals met</b>
+            {#each r.ad.lines as x}<div class="small">{x}</div>{/each}
+            <div class="small muted">{r.ad.fired ? 'You have been fired.' : r.ad.strikes ? `Hot seat: ${r.ad.strikes} of ${G.AD_STRIKES} strikes.` : 'Your job is safe.'}</div>
+          </div>
+        {/if}
         {#if r.cut.length}<p class="muted small">Cut to get down to {G.ROSTER_MAX}: {r.cut.join(', ')}</p>{/if}
-        <button class="btn primary block" onclick={() => (g!.report = null)}>Start the {g.year} season</button>
+        <button class="btn primary block" onclick={() => (g!.report = null)}>{g.fired ? 'See job offers' : `Start the ${g.year} season`}</button>
+      </div>
+    </div>
+  {:else if g.fired}
+    <div class="modal" role="dialog" aria-modal="true" aria-label="Fired">
+      <div class="card editor">
+        <div class="eyebrow">Athletic director</div>
+        <h2>You've been fired</h2>
+        <p class="muted">{G.AD_STRIKES} seasons in a row without meeting the AD's goals. A few smaller programs want you.</p>
+        {#each g.fired.offers as id}
+          {@const t = g.teams[id]}
+          <button class="pick" onclick={() => { G.takeJob(g!, id); tab = 'team'; flash(`Welcome to ${t.school}.`) }}>
+            {@render badge(t, 'md')}
+            <span class="grow"><b>{t.school}</b><small>{g.confNames[t.conf]} · Prestige {t.prestige.toFixed(1)}</small></span>
+            <span class="btn sm primary">Take the job</span>
+          </button>
+        {/each}
+        <button class="btn danger" onclick={reset}>{confirmReset ? 'Click again to wipe this career' : 'Retire and start a new career'}</button>
+      </div>
+    </div>
+  {:else if g.recap}
+    {@const rc = g.recap}
+    {@const ro = rc.result ? G.team(g, rc.result.opp) : null}
+    {@const mv = rc.rankBefore - rc.rankAfter}
+    <div class="modal" role="dialog" aria-modal="true" aria-label="Weekly recap">
+      <div class="card recap">
+        <div class="eyebrow">{rc.label}{rc.result ? ` · ${typeTag[rc.result.type]}` : ''}</div>
+        {#if rc.result && ro}
+          <div class="recap-score" class:win={rc.result.win}>
+            {@render badge(me, 'md')}
+            <b>{rc.result.my}</b><span class="dash">–</span><b>{rc.result.their}</b>
+            {@render badge(ro, 'md')}
+          </div>
+          <h2>{rc.result.win ? 'Win' : 'Loss'} {rc.result.home ? 'vs' : 'at'} {ro.school}</h2>
+        {:else}
+          <h2>{rc.label} results</h2>
+        {/if}
+        <div class="recap-rank">
+          <span>National rank</span>
+          <b>{rc.rankBefore <= G.TOP_N ? `#${rc.rankBefore}` : 'NR'} → {rc.rankAfter <= G.TOP_N ? `#${rc.rankAfter}` : 'NR'}</b>
+          {#if mv}<span class="mv {mv > 0 ? 'up' : 'down'}">{mv > 0 ? `▲${mv}` : `▼${-mv}`}</span>{/if}
+        </div>
+        {#if rc.lines.length}
+          <ul class="recap-lines">
+            {#each rc.lines as l}<li class={l.kind}><span class="ico">{RECAP_ICON[l.kind]}</span>{l.text}</li>{/each}
+          </ul>
+        {:else}
+          <p class="muted">A quiet week otherwise.</p>
+        {/if}
+        <button class="btn primary block" onclick={() => (g!.recap = null)}>{g.phase === 'offseason' ? 'On to the offseason' : `Continue to ${G.weekName(g.week).toLowerCase()}`}</button>
       </div>
     </div>
   {/if}
