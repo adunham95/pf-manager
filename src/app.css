@@ -459,6 +459,50 @@ button.skillrow:not(:disabled):hover { border-color: var(--blue); }
 .gembox { display: grid; gap: 2px; padding: 10px 12px; border-radius: 10px; font-size: 14px; background: linear-gradient(90deg, #e0f7ff, #efe6ff); color: #1e3a5f; }
 .gembox b { font-size: 15px; }
 
+/* roster outlook */
+.outlook { border-top: 1px solid var(--line); padding-top: 10px; }
+.outlook summary { cursor: pointer; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.outlook-grid { display: grid; gap: 4px; margin-top: 8px; }
+.olrow { display: grid; grid-template-columns: auto 3.2em minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 8px; background: var(--soft); }
+.olcount { font-variant-numeric: tabular-nums; color: var(--muted); }
+.olcount b { color: var(--ink); font-size: 16px; }
+.olwho { display: flex; flex-wrap: wrap; gap: 4px 10px; }
+.olwho .leaving { color: var(--muted); text-decoration: line-through; }
+.olwho .risk { color: light-dark(#9a5b00, #f5c46a); font-weight: 600; }
+.olwho .incoming { color: var(--win); font-weight: 700; }
+.olstatus { font-size: 12px; font-weight: 800; padding: 2px 8px; border-radius: 6px; white-space: nowrap; }
+.s-Short { background: color-mix(in srgb, var(--hot) 16%, transparent); color: var(--hot); }
+.s-At-risk { background: color-mix(in srgb, #f5a524 22%, transparent); color: light-dark(#8a5200, #f5c46a); }
+.s-No-depth { background: var(--line); color: var(--muted); }
+.s-Set { background: color-mix(in srgb, var(--win) 16%, transparent); color: var(--win); }
+
+/* live signing day */
+.signing { text-align: center; }
+.sdrecruit { display: flex; align-items: center; justify-content: center; gap: 12px; margin: 10px 0 4px; text-align: left; }
+.sdrecruit h2 { margin: 0; }
+.hats { display: flex; justify-content: center; gap: 14px; margin: 16px 0; flex-wrap: wrap; }
+.hat { display: grid; justify-items: center; gap: 6px; width: 120px; padding: 12px 8px; border: 2px solid var(--line); border-radius: 14px; background: var(--soft);
+  transition: transform .3s, opacity .3s, border-color .3s; }
+.hatcap { font-size: 30px; line-height: 1; }
+.hats.spinning .hat { animation: hatshake .25s ease-in-out infinite alternate; }
+.hats.spinning .hat:nth-child(2) { animation-delay: .12s; }
+.hats.spinning .hat:nth-child(3) { animation-delay: .06s; }
+.hat.picked { border-color: var(--blue); transform: scale(1.1); background: color-mix(in srgb, var(--blue) 12%, var(--card)); }
+.hat.out { opacity: .35; }
+@keyframes hatshake { from { transform: translateY(0) rotate(-4deg); } to { transform: translateY(-6px) rotate(4deg); } }
+.sdresult { font-size: 20px; font-weight: 800; margin: 6px 0 4px; }
+.sdresult.good { color: var(--win); }
+.sdlist { list-style: none; padding: 0; margin: 10px 0; display: grid; gap: 4px; text-align: left; max-height: 45vh; overflow-y: auto; }
+.sdlist li { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 8px; background: var(--soft); font-size: 14px; }
+.sdlist li.mine:not(.won) { color: var(--muted); }
+.sdlist li.won { background: color-mix(in srgb, var(--win) 14%, transparent); }
+@media (prefers-reduced-motion: reduce) { .hats.spinning .hat { animation: none; } .hat { transition: none; } }
+
+.rd-side { display: grid; justify-items: end; gap: 6px; }
+.followbtn { border: 1px solid var(--line); background: var(--card); border-radius: 999px; padding: 4px 12px; font-size: 13px; font-weight: 700; white-space: nowrap; }
+.followbtn.on { background: #fff4d6; border-color: #f5c46a; color: #8a5200; }
+.followstar { color: #f5a524; }
+
 /* rankings */
 .ranklayout { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 4fr); gap: 16px; align-items: start; margin-bottom: 16px; }
 .rk { color: var(--muted); font-weight: 600; font-size: .85em; }

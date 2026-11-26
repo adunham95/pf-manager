@@ -46,6 +46,8 @@ export interface Recruit {
   skills?: number[]
   /** Rated like a 5-star despite fewer stars. Hidden until scouted. */
   gem?: boolean
+  /** On your board because you're following him. */
+  followed?: boolean
   /** Week of a game-day visit. A home win that week adds interest, a loss takes some away. */
   visitWeek?: number
 }
@@ -85,6 +87,8 @@ export interface State {
   staff?: Coach[]; staffMarket?: Coach[]
   ad?: AD
   awards?: Award[]
+  /** Live signing day in progress: picks decided up front, revealed one at a time. */
+  signing?: SigningDay | null
   /** Set when the AD fires you: schools offering you a job. */
   fired?: { offers: number[] } | null
   facilities?: Partial<Record<Facility, number>>
@@ -1299,7 +1303,43 @@ function resolvePortal(g: State, report: SeasonReport) {
   g.portal = null
 }
 
+// ---------- Next season's roster ----------
+export type OutlookStatus = 'Short' | 'At risk' | 'No depth' | 'Set'
+export interface PositionOutlook {
+  pos: Pos; need: number; returning: number; commits: number; transfers: number
+  /** Seniors who graduate after this season. */
+  seniors: Player[]
+  /** Juniors good enough that they might leave early for the draft. */
+  earlyRisk: Player[]
+  status: OutlookStatus
+}
+/** Where each position stands for next season: who's leaving, who might leave, and what's coming in. */
+export function rosterOutlook(g: State): PositionOutlook[] {
+  const t = g.teams[g.user]
+  const leaving = portalLeaving(g)
+  const commits = g.recruits.filter(r => r.committed === g.user)
+  const incoming = portalIncoming(g)
+  return POSITIONS.map(pos => {
+    const mine = t.roster.filter(p => p.pos === pos && !leaving.has(p.id))
+    const seniors = mine.filter(p => p.year >= 4)
+    const returningPlayers = mine.filter(p => p.year < 4)
+    const earlyRisk = returningPlayers.filter(p => p.year === 3 && p.ovr >= EARLY_OVR)
+    const c = commits.filter(r => r.pos === pos).length, tr = incoming.filter(p => p.pos === pos).length
+    const have = returningPlayers.length + c + tr, need = STARTERS[pos]
+    const status: OutlookStatus = have < need ? 'Short' : have - earlyRisk.length < need ? 'At risk' : have === need ? 'No depth' : 'Set'
+    return { pos, need, returning: returningPlayers.length, commits: c, transfers: tr, seniors, earlyRisk, status }
+  })
+}
+
 // ---------- Recruiting ----------
+/** A rough read on the competition for a recruit, without giving away the number you need to reach. */
+export function rivalHint(r: Recruit) {
+  return r.rival >= 95 ? 'is all over him' : r.rival >= 78 ? 'is pushing hard for him' : r.rival >= 60 ? 'is recruiting him seriously' : 'is only lightly involved'
+}
+/** The same read for a transfer. Portal rivals run lower than high-school ones, so the cutoffs do too. */
+export function portalRivalHint(e: PortalEntry) {
+  return e.rival >= 75 ? 'is all over him' : e.rival >= 60 ? 'is pushing hard for him' : e.rival >= 45 ? 'is going after him seriously' : 'is only lightly interested'
+}
 export function rosterNeeds(g: State) {
   const t = g.teams[g.user]
   const leaving = portalLeaving(g)
@@ -1429,6 +1469,70 @@ export function finishLabel(g: State, t: Team) {
   const rank = confStandings(g, t.conf).indexOf(t) + 1
   return `${rank}${['st', 'nd', 'rd'][rank - 1] ?? 'th'} in ${g.confNames[t.conf]}`
 }
+// ---------- Live signing day ----------
+export interface SigningPick {
+  id: number; name: string; pos: Pos; stars: number
+  /** Schools he's choosing between, your school first when you're in it. */
+  schools: number[]
+  winner: number
+  /** Your chance, in words, before the reveal. */
+  odds: string
+  /** You were in the running. */
+  mine: boolean
+  /** He'd have picked you but you had no roster spot. */
+  noRoom?: boolean
+}
+export interface SigningDay { picks: SigningPick[]; shown: number }
+/** Your chance with an undecided recruit you offered: real if you're close to his line, slim if not. */
+function signingChance(r: Recruit) {
+  return clamp(0.5 + (r.interest - r.rival) / 40, 0.02, 0.45)
+}
+const oddsWord = (c: number) => c >= 0.35 ? 'Good chance' : c >= 0.2 ? 'Real shot' : c >= 0.08 ? 'Long shot' : 'Hail Mary'
+/**
+ * Starts signing day: every undecided recruit you offered announces, plus a few top national names.
+ * Picks are decided now (seeded), revealed one at a time by the UI, and saved so a reload can't change them.
+ * Returns false when there's nothing worth announcing, so the caller can go straight to the offseason.
+ */
+export function startSigningDay(g: State) {
+  if (g.phase !== 'offseason' || g.signing) return !!g.signing
+  setSeed(g.seed)
+  const undecided = g.recruits.filter(r => r.committed === null)
+  const mine = undecided.filter(r => r.offered)
+  const others = undecided.filter(r => !r.offered && r.stars >= 4).sort((a, b) => b.stars - a.stars || b.ovr - a.ovr).slice(0, 4)
+  if (!mine.length && !others.length) { g.seed = getSeed(); return false }
+  let open = rosterNeeds(g).open
+  const picks: SigningPick[] = []
+  // Smaller names first, building to the biggest.
+  for (const r of [...mine, ...others].sort((a, b) => a.stars - b.stars || a.ovr - b.ovr)) {
+    const isMine = r.offered
+    const chance = isMine ? signingChance(r) : 0
+    let winner = r.rivalTeam, noRoom = false
+    if (isMine && rnd() < chance) { if (open > 0) { winner = g.user; open-- } else noRoom = true }
+    r.committed = winner
+    picks.push({
+      id: r.id, name: `${r.first} ${r.last}`, pos: r.pos, stars: r.stars,
+      schools: isMine ? [g.user, r.rivalTeam] : [r.rivalTeam, ...shuffle(g.teams.filter(t => t.id !== r.rivalTeam && t.id !== g.user)).slice(0, 2).map(t => t.id)],
+      winner, odds: isMine ? oddsWord(chance) : '', mine: isMine, ...(noRoom ? { noRoom } : {}),
+    })
+  }
+  g.signing = { picks, shown: 0 }
+  g.seed = getSeed()
+  return true
+}
+export function revealNextSigning(g: State) {
+  const s = g.signing
+  if (!s || s.shown >= s.picks.length) return
+  const pk = s.picks[s.shown++]
+  if (pk.mine) g.news.unshift(pk.winner === g.user ? `SIGNING DAY: ${'★'.repeat(pk.stars)} ${pk.pos} ${pk.name} picked you!` : `Signing day: ${pk.pos} ${pk.name} picked ${team(g, pk.winner).school}.`)
+}
+export function revealAllSigning(g: State) { while (g.signing && g.signing.shown < g.signing.picks.length) revealNextSigning(g) }
+/** Ends signing day and moves on to the offseason recap. */
+export function finishSigningDay(g: State) {
+  revealAllSigning(g)
+  g.signing = null
+  advanceOffseason(g)
+}
+
 export function advanceOffseason(g: State) {
   if (g.phase !== 'offseason') return
   setSeed(g.seed)

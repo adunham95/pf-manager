@@ -227,7 +227,9 @@
   const STAR_LO = [0, 40, 46, 52, 58, G.ELITE_OVR]
   // Unscouted recruits sort by the middle of their star range, so sorting never leaks the real rating.
   const shownOvr = (r: Recruit) => r.scouted ? r.ovr : STAR_LO[r.stars] + 5
-  const onBoard = (r: Recruit) => r.committed === g!.user || (r.offered && r.committed === null)
+  /** Your board: everyone you follow, offer or have committed. Followed recruits stay on it after signing elsewhere. */
+  const onBoard = (r: Recruit) => r.committed === g!.user || (r.offered && r.committed === null) || !!r.followed
+  function toggleFollow(r: Recruit) { r.followed = !r.followed; flash(r.followed ? `Following ${r.first} ${r.last}. He's on your board.` : `Unfollowed ${r.first} ${r.last}.`) }
   const board = $derived.by(() => {
     if (!g || !needs) return []
     const list = g.recruits.filter(r =>
@@ -236,7 +238,7 @@
     const by: Record<RSort, (a: Recruit, b: Recruit) => number> = {
       stars: (a, b) => b.stars - a.stars || shownOvr(b) - shownOvr(a),
       ovr: (a, b) => shownOvr(b) - shownOvr(a) || b.stars - a.stars,
-      race: (a, b) => (b.interest - b.rival) - (a.interest - a.rival),
+      race: (a, b) => b.interest - a.interest,
       need: (a, b) => Number(needs!.need[b.pos] > 0) - Number(needs!.need[a.pos] > 0) || b.stars - a.stars,
     }
     return list.sort(by[rSort])
@@ -250,22 +252,21 @@
   function rStatus(r: Recruit): RStatus {
     if (r.committed === g!.user) return { k: 'mine', text: 'Committed' }
     if (r.committed !== null) return { k: 'gone', text: `Signed with ${G.team(g!, r.committed).abbr}` }
-    const gap = r.rival - r.interest
-    if (r.offered) return gap <= 0 ? { k: 'lead', text: 'Leading' } : { k: 'behind', text: `Behind ${gap}` }
-    return gap <= 0 ? { k: 'ready', text: 'Ready to offer' } : { k: 'cold', text: 'No offer' }
+    // The commit line is hidden: you only learn you've reached it when he's ready (or wants to commit).
+    const reached = r.interest >= r.rival
+    if (r.offered) return reached ? { k: 'lead', text: 'Wants to commit' } : { k: 'behind', text: 'Offered' }
+    return reached ? { k: 'ready', text: 'Ready to offer' } : { k: 'cold', text: 'No offer' }
   }
   function rNote(r: Recruit) {
     const rv = G.team(g!, r.rivalTeam).school
     if (r.committed === g!.user) return 'Committed. He joins your roster on signing day.'
     if (r.committed !== null) return `Signed with ${G.team(g!, r.committed).school}.`
     if (!recruitingOpen) return 'Recruiting is closed until next season.'
-    const gap = r.rival - r.interest
-    if (gap <= 0) {
+    if (r.interest >= r.rival) {
       if (!r.offered) return 'He is ready. Offer him and he commits.'
-      return needs!.open <= 0 ? 'He wants to commit, but you have no open roster spots. Free one up to sign him.' : `Ahead of ${rv}. He commits at the next check.`
+      return needs!.open <= 0 ? 'He wants to commit, but you have no open roster spots. Free one up to sign him.' : `You've passed ${rv}. He commits at the next check.`
     }
-    const n = Math.ceil(gap / G.expectedGain(g!, r, 'contact'))
-    return `${gap} behind ${rv}. About ${n} contact${n === 1 ? '' : 's'} to pass them, and their pull grows each week.${r.offered ? '' : ' He only commits to schools that offer.'}`
+    return `${rv} ${G.rivalHint(r)}. Keep building interest: he commits the moment you pass them, and you won't know where that line is until you get there.${r.offered ? '' : ' He only commits to schools that offer.'}`
   }
   // playing time
   const games = $derived(g ? G.userGamesPlayed(g) : 0)
@@ -289,6 +290,14 @@
   function hire(id: number) { if (g) flash(G.hireCoach(g, id)) }
   const RECAP_ICON: Record<G.RecapKind, string> = { injury: '✚', commit: '★', lost: '✕', visit: '⌂', goal: '✓', league: '🏆', trait: '⚡', info: '•', spotlight: '📺', bowl: '', award: '🏈' }
   const traitTag = (t?: G.Trait) => t ? G.TRAITS[t] : null
+  // live signing day: pending (hats on the table), spinning (the pause), result (the pick)
+  let sdPhase = $state<'pending' | 'spinning' | 'result'>('pending')
+  function revealPick() {
+    if (!g?.signing) return
+    sdPhase = 'spinning'
+    const quick = matchMedia('(prefers-reduced-motion: reduce)').matches
+    setTimeout(() => { if (g?.signing) { G.revealNextSigning(g); sdPhase = 'result' } }, quick ? 150 : 1300)
+  }
   function train(p: Player, i: number) { if (g) flash(G.setTraining(g, p.id, i)) }
   const trainName = (p: Player) => { const i = g ? G.trainingSkill(g, p.id) : null; return i === null ? null : G.SKILLS[p.pos][i] }
   /** The skill or two that count most toward OVR at a position. */
@@ -302,20 +311,19 @@
   function pStatus(e: PortalEntry): RStatus {
     const own = e.from === g!.user
     if (e.to === g!.user) return { k: 'mine', text: own ? 'Staying' : 'Signed' }
-    const gap = e.rival - e.interest
-    if (e.offered) return gap <= 0 ? { k: 'lead', text: 'Leading' } : { k: 'behind', text: `Behind ${gap}` }
-    return gap <= 0 ? { k: 'ready', text: own ? 'Ask him to stay' : 'Ready to offer' } : { k: own ? 'behind' : 'cold', text: own ? 'Leaving' : 'No offer' }
+    // Like recruiting, the line is hidden: you only learn you've passed it when he's ready (or wants to sign).
+    const reached = e.interest >= e.rival
+    if (e.offered) return reached ? { k: 'lead', text: own ? 'Wants to stay' : 'Wants to sign' } : { k: 'behind', text: own ? 'Asked to stay' : 'Offered' }
+    return reached ? { k: 'ready', text: own ? 'Ask him to stay' : 'Ready to offer' } : { k: own ? 'behind' : 'cold', text: own ? 'Leaving' : 'No offer' }
   }
   function pNote(e: PortalEntry) {
     const own = e.from === g!.user, rv = G.team(g!, e.rivalTeam).school
     if (e.to === g!.user) return own ? 'He is staying with you.' : 'Signed. He joins your roster on signing day.'
-    const gap = e.rival - e.interest
-    if (gap <= 0) {
+    if (e.interest >= e.rival) {
       if (!e.offered) return own ? 'He would stay. Ask him to stay to keep him.' : 'He is ready. Offer him and he signs.'
       return 'He wants to come, but you are out of transfer slots or roster spots.'
     }
-    const n = Math.ceil(gap / G.expectedPortalGain(g!, e, 'pitch'))
-    return `${gap} behind ${rv}. About ${n} pitch${n === 1 ? '' : 'es'} to pass them.${own ? ` If you don't, he goes to ${rv} on signing day.` : e.offered ? '' : ' He only signs with schools that offer.'}`
+    return `${rv} ${G.portalRivalHint(e)}. Keep working on him: he ${own ? 'stays' : 'signs'} the moment you pass them, and you won't know where that line is until you get there.${own ? ` If you don't get there, he goes to ${rv} on signing day.` : e.offered ? '' : ' He only signs with schools that offer.'}`
   }
   function pAct(e: PortalEntry, a: 'offer' | 'pitch' | 'visit') { if (g) flash(G.portalAction(g, e, a)) }
 
@@ -565,7 +573,6 @@
   {@const from = G.team(g!, e.from)}
   {@const st = pStatus(e)}
   {@const own = e.from === g!.user}
-  {@const scale = Math.max(e.rival, e.interest, 30) * 1.15}
   {@const starts = G.wouldStart(g!, e)}
   <div class="rdetail">
     <div class="rd-head">
@@ -587,12 +594,11 @@
     {#if e.p.trait}{@render traitBox(e.p.trait)}{/if}
     <div class="race">
       <div class="race-top">
-        <span class="you">{me?.abbr} <b>{e.interest}</b></span>
-        <span class="them">{@render badge(rv, 'sm')} <span><small>Top rival</small>{rv.school} <b>{e.rival}</b></span></span>
+        <span class="you">Your interest <b>{e.interest}</b></span>
+        <span class="them">{@render badge(rv, 'sm')} <span><small>Top rival</small>{rv.school}</span></span>
       </div>
       <div class="race-bar" class:ahead={e.interest >= e.rival}>
-        <i style="width:{Math.min(100, e.interest / scale * 100)}%"></i>
-        <em style="left:{Math.min(100, e.rival / scale * 100)}%"></em>
+        <i style="width:{Math.min(100, e.interest / 1.4)}%"></i>
       </div>
       <p class="race-note">{pNote(e)}</p>
     </div>
@@ -617,7 +623,6 @@
 {#snippet recruitDetail(r: Recruit)}
   {@const rv = G.team(g!, r.rivalTeam)}
   {@const st = rStatus(r)}
-  {@const scale = Math.max(r.rival, r.interest, 30) * 1.15}
   {@const live = recruitingOpen && r.committed === null}
   <div class="rdetail">
     <div class="rd-head">
@@ -626,7 +631,10 @@
         <h2>{r.first} {r.last}</h2>
         <div class="stars lg">{starStr(r.stars)}</div>
       </div>
-      <span class="rstat {st.k} big">{st.text}</span>
+      <div class="rd-side">
+        <span class="rstat {st.k} big">{st.text}</span>
+        <button class="followbtn" class:on={r.followed} onclick={() => toggleFollow(r)} aria-pressed={!!r.followed}>{r.followed ? '★ Following' : '☆ Follow'}</button>
+      </div>
     </div>
     {#if needs && needs.need[r.pos] > 0 && r.committed === null}<div class="tag need">Fills a need at {r.pos}</div>{/if}
     {#if r.scouted && r.gem}<div class="gembox"><b>💎 Hidden gem</b><span>Rated like a 5-star, but the other schools still see a {r.stars}-star. He should be easier to land than his rating says.</span></div>{/if}
@@ -646,12 +654,11 @@
 
     <div class="race">
       <div class="race-top">
-        <span class="you">{me?.abbr} <b>{r.interest}</b></span>
-        <span class="them">{@render badge(rv, 'sm')} <span><small>Top rival</small>{rv.school} <b>{r.rival}</b></span></span>
+        <span class="you">Your interest <b>{r.interest}</b></span>
+        <span class="them">{@render badge(rv, 'sm')} <span><small>Top rival</small>{rv.school}</span></span>
       </div>
       <div class="race-bar" class:ahead={r.interest >= r.rival}>
-        <i style="width:{Math.min(100, r.interest / scale * 100)}%"></i>
-        <em style="left:{Math.min(100, r.rival / scale * 100)}%"></em>
+        <i style="width:{Math.min(100, r.interest / 1.4)}%"></i>
       </div>
       <p class="race-note">{rNote(r)}</p>
     </div>
@@ -769,7 +776,7 @@
                 </div>
               {/if}
               <p class="muted">On signing day the portal closes, seniors graduate, players develop and your commits and transfers join the roster.</p>
-              <button class="btn primary block" onclick={() => G.advanceOffseason(g!)}>Go to signing day</button>
+              <button class="btn primary block" onclick={() => { if (!G.startSigningDay(g!)) G.advanceOffseason(g!); sdPhase = 'pending' }}>Go to signing day</button>
             {:else if next && opp && myR && oppR}
               {#if mySpot}
                 <div class="spotbanner"><span class="spotlogo">📺 Saturday Spotlight</span>
@@ -904,6 +911,25 @@
           {/each}
         </div>
         <p class="muted small">Returning players plus commits against starters needed. Red positions are short, and recruits there gain interest 20% faster.</p>
+        <details class="outlook" open>
+          <summary><b>Next season's roster</b> <span class="muted small">seniors graduate, and juniors rated {G.EARLY_OVR}+ might leave for the draft</span></summary>
+          <div class="outlook-grid">
+            {#each G.rosterOutlook(g) as o}
+              <div class="olrow">
+                <span class="pill {o.pos}">{o.pos}</span>
+                <span class="olcount"><b>{o.returning + o.commits + o.transfers}</b>/{o.need}</span>
+                <span class="olwho small">
+                  {#each o.seniors as p}<span class="leaving">SR {p.last} ({Math.round(p.ovr)})</span>{/each}
+                  {#each o.earlyRisk as p}<span class="risk">JR {p.last} ({Math.round(p.ovr)}) may leave</span>{/each}
+                  {#if o.commits}<span class="incoming">+{o.commits} commit{o.commits > 1 ? 's' : ''}</span>{/if}
+                  {#if o.transfers}<span class="incoming">+{o.transfers} transfer{o.transfers > 1 ? 's' : ''}</span>{/if}
+                  {#if !o.seniors.length && !o.earlyRisk.length && !o.commits && !o.transfers}<span class="muted">No changes</span>{/if}
+                </span>
+                <span class="olstatus s-{o.status.replace(' ', '-')}">{o.status}</span>
+              </div>
+            {/each}
+          </div>
+        </details>
         {#if commitList.length}
           <div class="classrow">
             <span class="eyebrow">Your class</span>
@@ -924,12 +950,12 @@
               <select bind:value={starFilter} aria-label="Stars"><option value={0}>All stars</option>{#each [5, 4, 3, 2, 1] as s}<option value={s}>{s} star</option>{/each}</select>
               <select bind:value={rSort} aria-label="Sort">
                 <option value="stars">Sort: Stars</option><option value="ovr">Sort: OVR</option>
-                <option value="race">Sort: Closest to signing</option><option value="need">Sort: Fills a need</option>
+                <option value="race">Sort: Your interest</option><option value="need">Sort: Fills a need</option>
               </select>
             </div>
           </div>
           {#if board.length === 0}
-            <p class="muted pad">{rView === 'board' ? 'Nobody on your board yet. Offer recruits from Available.' : 'No recruits match these filters.'}</p>
+            <p class="muted pad">{rView === 'board' ? 'Nobody on your board yet. Follow or offer recruits from Available.' : 'No recruits match these filters.'}</p>
           {/if}
           <div class="rlist">
             {#each board as r (r.id)}
@@ -937,11 +963,11 @@
               <button class="rrow {st.k}" class:sel={sel?.id === r.id} onclick={() => (selId = r.id)} aria-pressed={sel?.id === r.id}>
                 <span class="pill {r.pos}" class:need={needs.need[r.pos] > 0}>{r.pos}</span>
                 <span class="who">
-                  <span class="pname">{r.first} {r.last}{#if r.scouted && r.gem} <span title="Hidden gem">💎</span>{/if}</span>
+                  <span class="pname">{#if r.followed}<span class="followstar" title="Following">★</span> {/if}{r.first} {r.last}{#if r.scouted && r.gem} <span title="Hidden gem">💎</span>{/if}</span>
                   <span class="stars">{starStr(r.stars)}</span>
                 </span>
                 <span class="rmini">
-                  <span class="bar" class:ahead={r.interest >= r.rival}><i style="width:{Math.min(100, r.interest / 1.4)}%"></i><em style="left:{Math.min(100, r.rival / 1.4)}%"></em></span>
+                  <span class="bar" class:ahead={r.interest >= r.rival}><i style="width:{Math.min(100, r.interest / 1.4)}%"></i></span>
                   <span class="rstat {st.k}">{st.text}</span>
                 </span>
                 <span class="nums"><b>{estRange(r)}</b><small>OVR</small></span>
@@ -1022,7 +1048,7 @@
                     <span class="psub">{e.from === g.user ? 'Yours' : from.abbr} · {G.YEARS[e.p.year]} · <span class="stars">{'★'.repeat(e.p.stars)}</span></span>
                   </span>
                   <span class="rmini">
-                    <span class="bar" class:ahead={e.interest >= e.rival}><i style="width:{Math.min(100, e.interest / 1.4)}%"></i><em style="left:{Math.min(100, e.rival / 1.4)}%"></em></span>
+                    <span class="bar" class:ahead={e.interest >= e.rival}><i style="width:{Math.min(100, e.interest / 1.4)}%"></i></span>
                     <span class="rstat {st.k}">{st.text}</span>
                   </span>
                   <span class="nums"><b>{Math.round(e.p.ovr)}</b><small>OVR</small></span>
@@ -1396,7 +1422,55 @@
     {/if}
   </main>
 
-  {#if g.report}
+  {#if g.signing}
+    {@const sd = g.signing}
+    {@const done = sd.shown >= sd.picks.length}
+    <div class="modal" role="dialog" aria-modal="true" aria-label="National Signing Day">
+      <div class="card recap signing">
+        <div class="eyebrow">📜 National Signing Day · {Math.min(sd.shown + (sdPhase === 'result' ? 0 : 1), sd.picks.length)} of {sd.picks.length}</div>
+        {#if done && sdPhase !== 'result'}
+          {@const mine = sd.picks.filter(x => x.mine)}
+          <h2>Signing day is over</h2>
+          <p class="myproj">{mine.length ? `You landed ${mine.filter(x => x.winner === g!.user).length} of ${mine.length} undecided recruits.` : 'No undecided recruits had your offer.'}</p>
+          <ul class="sdlist">
+            {#each sd.picks as x}
+              <li class:won={x.winner === g.user} class:mine={x.mine}><span class="pill {x.pos}">{x.pos}</span><b>{x.name}</b><span class="stars">{'★'.repeat(x.stars)}</span>
+                <span class="grow"></span>{@render badge(G.team(g, x.winner), 'sm')}</li>
+            {/each}
+          </ul>
+          <button class="btn primary block" onclick={() => G.finishSigningDay(g!)}>On to the offseason</button>
+        {:else}
+          {@const x = sdPhase === 'result' ? sd.picks[sd.shown - 1] : sd.picks[sd.shown]}
+          <div class="sdrecruit">
+            <span class="pill big {x.pos}">{x.pos}</span>
+            <div><h2>{x.name}</h2><div class="stars lg">{'★'.repeat(x.stars)}{'☆'.repeat(5 - x.stars)}</div></div>
+          </div>
+          <p class="muted">{sdPhase === 'result' ? 'He made his choice.' : `Choosing between ${x.schools.length} schools.`}{#if x.mine && sdPhase !== 'result'} Your odds: <b>{x.odds}</b>.{/if}</p>
+          <div class="hats" class:spinning={sdPhase === 'spinning'}>
+            {#each x.schools as id}
+              {@const t = G.team(g, id)}
+              <div class="hat" class:picked={sdPhase === 'result' && x.winner === id} class:out={sdPhase === 'result' && x.winner !== id}>
+                <span class="hatcap" aria-hidden="true">🧢</span>{@render badge(t, 'md')}<span class="small">{t.school}</span>
+              </div>
+            {/each}
+          </div>
+          {#if sdPhase === 'result'}
+            <p class="sdresult" class:good={x.winner === g.user}>
+              {#if x.winner === g.user}🎉 He's coming to {G.team(g, x.winner).school}!
+              {:else if x.noRoom}He wanted you, but you had no roster spot. He picks {G.team(g, x.winner).school}.
+              {:else}He picks {G.team(g, x.winner).school}.{/if}
+            </p>
+            <button class="btn primary block" onclick={() => (sdPhase = 'pending')}>{done ? 'See the results' : 'Next recruit'}</button>
+          {:else}
+            <div class="two">
+              <button class="btn" onclick={() => { G.revealAllSigning(g!); sdPhase = 'pending' }}>Skip to the end</button>
+              <button class="btn primary" disabled={sdPhase === 'spinning'} onclick={revealPick}>Reveal the pick</button>
+            </div>
+          {/if}
+        {/if}
+      </div>
+    </div>
+  {:else if g.report}
     {@const r = g.report}
     <div class="modal">
       <div class="card">
