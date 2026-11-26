@@ -495,6 +495,7 @@ button.skillrow:not(:disabled):hover { border-color: var(--blue); }
 .hat.out { opacity: .35; }
 @keyframes hatshake { from { transform: translateY(0) rotate(-4deg); } to { transform: translateY(-6px) rotate(4deg); } }
 .sdresult { font-size: 20px; font-weight: 800; margin: 6px 0 4px; }
+.sdbuzz { margin: 8px auto 0; padding: 6px 12px; border-radius: 999px; background: #fff4d6; color: #8a5200; font-weight: 700; font-size: 14px; width: fit-content; }
 .sdresult.good { color: var(--win); }
 .sdlist { list-style: none; padding: 0; margin: 10px 0; display: grid; gap: 4px; text-align: left; max-height: 45vh; overflow-y: auto; }
 .sdlist li { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 8px; background: var(--soft); font-size: 14px; }
@@ -506,6 +507,10 @@ button.skillrow:not(:disabled):hover { border-color: var(--blue); }
 .followbtn { border: 1px solid var(--line); background: var(--card); border-radius: 999px; padding: 4px 12px; font-size: 13px; font-weight: 700; white-space: nowrap; }
 .followbtn.on { background: #fff4d6; border-color: #f5c46a; color: #8a5200; }
 .followstar { color: #f5a524; }
+
+.rlayout.single { grid-template-columns: minmax(0, 1fr); }
+.rd-btns { display: flex; gap: 6px; align-items: center; }
+.rrow .chev { flex: none; width: 14px; color: var(--muted); font-size: 12px; }
 
 /* rankings */
 .ranklayout { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 4fr); gap: 16px; align-items: start; margin-bottom: 16px; }

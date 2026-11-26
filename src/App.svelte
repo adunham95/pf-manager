@@ -245,7 +245,8 @@
   })
   const commitList = $derived(g ? g.recruits.filter(r => r.committed === g!.user) : [])
   const boardCount = $derived(g ? g.recruits.filter(onBoard).length : 0)
-  const sel = $derived(g ? (g.recruits.find(r => r.id === selId) ?? board[0] ?? null) : null)
+  // Like player rows: nothing open until you tap a recruit, and tapping again collapses him.
+  const sel = $derived(g && selId !== null ? (g.recruits.find(r => r.id === selId) ?? null) : null)
   const weeksLeft = $derived(g && recruitingOpen ? G.REGULAR_WEEKS - g.week + 1 : 0)
 
   type RStatus = { k: 'mine' | 'gone' | 'lead' | 'behind' | 'ready' | 'cold'; text: string }
@@ -633,7 +634,10 @@
       </div>
       <div class="rd-side">
         <span class="rstat {st.k} big">{st.text}</span>
-        <button class="followbtn" class:on={r.followed} onclick={() => toggleFollow(r)} aria-pressed={!!r.followed}>{r.followed ? '★ Following' : '☆ Follow'}</button>
+        <div class="rd-btns">
+          <button class="followbtn" class:on={r.followed} onclick={() => toggleFollow(r)} aria-pressed={!!r.followed}>{r.followed ? '★ Following' : '☆ Follow'}</button>
+          <button class="btn sm" onclick={() => (selId = null)} aria-label="Close recruit card">Close</button>
+        </div>
       </div>
     </div>
     {#if needs && needs.need[r.pos] > 0 && r.committed === null}<div class="tag need">Fills a need at {r.pos}</div>{/if}
@@ -932,7 +936,7 @@
         {/if}
       </section>
 
-      <div class="rlayout">
+      <div class="rlayout" class:single={!sel}>
         <section class="card flush">
           <div class="rtools">
             <div class="seg">
@@ -954,7 +958,7 @@
           <div class="rlist">
             {#each board as r (r.id)}
               {@const st = rStatus(r)}
-              <button class="rrow {st.k}" class:sel={sel?.id === r.id} onclick={() => (selId = r.id)} aria-pressed={sel?.id === r.id}>
+              <button class="rrow {st.k}" class:sel={sel?.id === r.id} onclick={() => (selId = selId === r.id ? null : r.id)} aria-expanded={sel?.id === r.id}>
                 <span class="pill {r.pos}" class:need={needs.need[r.pos] > 0}>{r.pos}</span>
                 <span class="who">
                   <span class="pname">{#if r.followed}<span class="followstar" title="Following">★</span> {/if}{r.first} {r.last}{#if r.scouted && r.gem} <span title="Hidden gem">💎</span>{/if}</span>
@@ -965,14 +969,13 @@
                   <span class="rstat {st.k}">{st.text}</span>
                 </span>
                 <span class="nums"><b>{estRange(r)}</b><small>OVR</small></span>
+                <span class="chev" aria-hidden="true">{sel?.id === r.id ? '▾' : '▸'}</span>
               </button>
               {#if sel?.id === r.id}<div class="rinline">{@render recruitDetail(r)}</div>{/if}
             {/each}
           </div>
         </section>
-        <aside class="card rside">
-          {#if sel}{@render recruitDetail(sel)}{:else}<p class="muted">Pick a recruit to see his details.</p>{/if}
-        </aside>
+        {#if sel}<aside class="card rside">{@render recruitDetail(sel)}</aside>{/if}
       </div>
 
     {:else if tab === 'portal'}
@@ -1422,6 +1425,7 @@
     <div class="modal" role="dialog" aria-modal="true" aria-label="National Signing Day">
       <div class="card recap signing">
         <div class="eyebrow">📜 National Signing Day · {Math.min(sd.shown + (sdPhase === 'result' ? 0 : 1), sd.picks.length)} of {sd.picks.length}</div>
+        {#if sd.buzz}<p class="sdbuzz">🏆 {sd.buzz}</p>{/if}
         {#if done && sdPhase !== 'result'}
           {@const mine = sd.picks.filter(x => x.mine)}
           <h2>Signing day is over</h2>

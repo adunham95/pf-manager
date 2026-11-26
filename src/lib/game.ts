@@ -1482,12 +1482,30 @@ export interface SigningPick {
   /** He'd have picked you but you had no roster spot. */
   noRoom?: boolean
 }
-export interface SigningDay { picks: SigningPick[]; shown: number }
-/** Your chance with an undecided recruit you offered: real if you're close to his line, slim if not. */
-function signingChance(r: Recruit) {
-  return clamp(0.5 + (r.interest - r.rival) / 40, 0.02, 0.45)
+export interface SigningDay { picks: SigningPick[]; shown: number; buzz?: string }
+/**
+ * Recruits love a winner: your postseason finish adds to every signing-day chance.
+ * Only the best result counts (a champion doesn't also get the bowl or conference bonus).
+ */
+export function postseasonBuzz(g: State): { bonus: number; text: string } | null {
+  const me = g.teams[g.user]
+  const mine = (type: GameType) => g.schedule.find(x => x.type === type && x.played && (x.home === g.user || x.away === g.user))
+  if (me.champ) return { bonus: 0.15, text: 'National champions! Every recruit in the country is paying attention.' }
+  if (mine('final')) return { bonus: 0.08, text: 'You played for the national title. Recruits noticed.' }
+  if (mine('semi')) return { bonus: 0.06, text: 'A playoff semifinal run has recruits talking.' }
+  if (mine('quarter') || me.confChamp) return { bonus: 0.04, text: me.confChamp ? 'Conference champions. That carries weight with recruits.' : 'A playoff appearance helps on signing day.' }
+  const bowl = mine('bowl')
+  if (bowl && (bowl.home === g.user ? bowl.hs! > bowl.as! : bowl.as! > bowl.hs!)) return { bonus: 0.03, text: `Winning the ${BOWLS[bowl.bowl ?? 0].name} gave you a little momentum.` }
+  return null
 }
-const oddsWord = (c: number) => c >= 0.35 ? 'Good chance' : c >= 0.2 ? 'Real shot' : c >= 0.08 ? 'Long shot' : 'Hail Mary'
+/** Base chance tops out here; your postseason buzz can push it up to SIGNING_MAX. */
+const SIGNING_BASE_MAX = 0.45
+const SIGNING_MAX = 0.6
+/** Your chance with an undecided recruit you offered: real if you're close to his line, slim if not, better after a big postseason. */
+function signingChance(r: Recruit, bonus = 0) {
+  return Math.min(SIGNING_MAX, clamp(0.5 + (r.interest - r.rival) / 40, 0.02, SIGNING_BASE_MAX) + bonus)
+}
+const oddsWord = (c: number) => c >= 0.5 ? 'Strong chance' : c >= 0.35 ? 'Good chance' : c >= 0.2 ? 'Real shot' : c >= 0.08 ? 'Long shot' : 'Hail Mary'
 /**
  * Starts signing day: every undecided recruit you offered announces, plus a few top national names.
  * Picks are decided now (seeded), revealed one at a time by the UI, and saved so a reload can't change them.
@@ -1501,11 +1519,12 @@ export function startSigningDay(g: State) {
   const others = undecided.filter(r => !r.offered && r.stars >= 4).sort((a, b) => b.stars - a.stars || b.ovr - a.ovr).slice(0, 4)
   if (!mine.length && !others.length) { g.seed = getSeed(); return false }
   let open = rosterNeeds(g).open
+  const buzz = postseasonBuzz(g)
   const picks: SigningPick[] = []
   // Smaller names first, building to the biggest.
   for (const r of [...mine, ...others].sort((a, b) => a.stars - b.stars || a.ovr - b.ovr)) {
     const isMine = r.offered
-    const chance = isMine ? signingChance(r) : 0
+    const chance = isMine ? signingChance(r, buzz?.bonus ?? 0) : 0
     let winner = r.rivalTeam, noRoom = false
     if (isMine && rnd() < chance) { if (open > 0) { winner = g.user; open-- } else noRoom = true }
     r.committed = winner
@@ -1515,7 +1534,7 @@ export function startSigningDay(g: State) {
       winner, odds: isMine ? oddsWord(chance) : '', mine: isMine, ...(noRoom ? { noRoom } : {}),
     })
   }
-  g.signing = { picks, shown: 0 }
+  g.signing = { picks, shown: 0, ...(buzz ? { buzz: buzz.text } : {}) }
   g.seed = getSeed()
   return true
 }
