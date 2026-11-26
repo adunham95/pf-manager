@@ -139,16 +139,18 @@ const FIRST = ['Jalen', 'Marcus', 'Tyler', 'Caleb', 'Deshawn', 'Brady', 'Isaiah'
 const LAST = ['Johnson', 'Carter', 'Hughes', 'Ward', 'Bishop', 'Reeves', 'Coleman', 'Price', 'Hale', 'Brooks', 'Sanders', 'Fletcher', 'Mack', 'Dawson', 'Pryor', 'Tate', 'Holloway', 'Banks', 'Whitaker', 'Greer', 'Vance', 'Moody', 'Booker', 'Pruitt', 'Lyle', 'Combs', 'Sutton', 'Rivers', 'Fox', 'Barnes', 'Oakley', 'Stroud', 'Pace', 'Kemp', 'McCoy', 'Hester', 'Rollins', 'Duke', 'Ingram', 'Shaw']
 
 const CONFS = ['Ridge Conference', 'Gulf Coast', 'Heartland 8', 'Pacific Frontier']
+/** How each conference starts out. Prestige below follows these tiers, with some overlap at the edges. */
+export const CONF_TIERS = ['Small schools', 'Power conference', 'Strong', 'Middle']
 // school, mascot, abbr, color, base prestige
 const SCHOOLS: [string, string, string, string, number][] = [
-  ['Cumberland', 'Wolves', 'CUM', '#c2410c', 7], ['Blue Ridge State', 'Hawks', 'BRS', '#1d4ed8', 6], ['Holston', 'Rivermen', 'HOL', '#15803d', 4], ['Watauga Tech', 'Engineers', 'WAT', '#b91c1c', 3],
-  ['Clinch Valley', 'Miners', 'CLV', '#525252', 2], ['Smoky Mountain', 'Bears', 'SMU', '#7c3aed', 8], ['Chattahoochee', 'Gators', 'CHA', '#0f766e', 5], ['Pine Bluff A&M', 'Owls', 'PBA', '#a16207', 2],
-  ['Bayou State', 'Pelicans', 'BAY', '#9333ea', 9], ['Mobile Bay', 'Mariners', 'MOB', '#0369a1', 5], ['Galveston', 'Storm', 'GAL', '#dc2626', 4], ['Tallahassee Tech', 'Seminoles', 'TTE', '#9f1239', 7],
-  ['Coastal Carolina A&M', 'Pirates', 'CCA', '#0d9488', 3], ['Okefenokee', 'Cranes', 'OKE', '#4d7c0f', 1], ['Sabine', 'Cajuns', 'SAB', '#ca8a04', 3], ['Pensacola', 'Admirals', 'PEN', '#1e3a8a', 6],
-  ['Prairie State', 'Bison', 'PRS', '#92400e', 8], ['Ozark', 'Razorbacks', 'OZK', '#991b1b', 6], ['Platte River', 'Huskers', 'PLR', '#b91c1c', 7], ['Cedar Falls', 'Panthers', 'CDF', '#6d28d9', 3],
-  ['Wichita Tech', 'Shockers', 'WIT', '#eab308', 4], ['Des Plaines', 'Foxes', 'DPL', '#c2410c', 2], ['Kankakee', 'Thunder', 'KAN', '#334155', 1], ['Missouri Valley', 'Mules', 'MOV', '#0f766e', 5],
-  ['Cascade', 'Ducks', 'CAS', '#16a34a', 8], ['Sierra State', 'Grizzlies', 'SIS', '#1e40af', 7], ['Mojave', 'Scorpions', 'MOJ', '#d97706', 3], ['Willamette', 'Beavers', 'WIL', '#ea580c', 5],
-  ['Puget Sound', 'Orcas', 'PUG', '#0e7490', 4], ['High Desert', 'Coyotes', 'HDS', '#a8a29e', 2], ['Big Sur', 'Condors', 'BSU', '#be123c', 6], ['Tahoe', 'Avalanche', 'TAH', '#2563eb', 1],
+  ['Cumberland', 'Wolves', 'CUM', '#c2410c', 4], ['Blue Ridge State', 'Hawks', 'BRS', '#1d4ed8', 3], ['Holston', 'Rivermen', 'HOL', '#15803d', 2], ['Watauga Tech', 'Engineers', 'WAT', '#b91c1c', 2],
+  ['Clinch Valley', 'Miners', 'CLV', '#525252', 1], ['Smoky Mountain', 'Bears', 'SMU', '#7c3aed', 5], ['Chattahoochee', 'Gators', 'CHA', '#0f766e', 3], ['Pine Bluff A&M', 'Owls', 'PBA', '#a16207', 1],
+  ['Bayou State', 'Pelicans', 'BAY', '#9333ea', 9], ['Mobile Bay', 'Mariners', 'MOB', '#0369a1', 7], ['Galveston', 'Storm', 'GAL', '#dc2626', 7], ['Tallahassee Tech', 'Seminoles', 'TTE', '#9f1239', 8],
+  ['Coastal Carolina A&M', 'Pirates', 'CCA', '#0d9488', 6], ['Okefenokee', 'Cranes', 'OKE', '#4d7c0f', 5], ['Sabine', 'Cajuns', 'SAB', '#ca8a04', 6], ['Pensacola', 'Admirals', 'PEN', '#1e3a8a', 8],
+  ['Prairie State', 'Bison', 'PRS', '#92400e', 8], ['Ozark', 'Razorbacks', 'OZK', '#991b1b', 6], ['Platte River', 'Huskers', 'PLR', '#b91c1c', 7], ['Cedar Falls', 'Panthers', 'CDF', '#6d28d9', 5],
+  ['Wichita Tech', 'Shockers', 'WIT', '#eab308', 5], ['Des Plaines', 'Foxes', 'DPL', '#c2410c', 4], ['Kankakee', 'Thunder', 'KAN', '#334155', 3], ['Missouri Valley', 'Mules', 'MOV', '#0f766e', 6],
+  ['Cascade', 'Ducks', 'CAS', '#16a34a', 7], ['Sierra State', 'Grizzlies', 'SIS', '#1e40af', 6], ['Mojave', 'Scorpions', 'MOJ', '#d97706', 3], ['Willamette', 'Beavers', 'WIL', '#ea580c', 4],
+  ['Puget Sound', 'Orcas', 'PUG', '#0e7490', 4], ['High Desert', 'Coyotes', 'HDS', '#a8a29e', 2], ['Big Sur', 'Condors', 'BSU', '#be123c', 5], ['Tahoe', 'Avalanche', 'TAH', '#2563eb', 2],
 ]
 const CUPCAKES: [string, string, string][] = [
   ['Northwest Directional', 'Sheep', 'NWD'], ['Little Rock Christian', 'Lambs', 'LRC'], ['Saint Agnes', 'Doves', 'SAG'], ['Eastern Lowland', 'Moles', 'ELO'],
@@ -965,11 +967,14 @@ export function advanceOffseason(g: State) {
   const ad = g.ad!
   const results = ad.goals.map(x => ({ x, done: goalProgress(g, x).done }))
   const met = results.filter(r => r.done).length
-  // prestige drift
+  // prestige drift: toward a target from final national rank (which counts schedule and conference strength),
+  // pulled toward the conference's average so power conferences stay strong and small ones stay small
+  const finalRank = new Map(rankAt(g, lastPlayedWeek(g)).map(r => [r.team.id, r.rank]))
+  const confAvg = g.confNames.map((_, c) => { const m = g.teams.filter(t => t.conf === c); return m.reduce((n, t) => n + t.prestige, 0) / m.length })
   for (const t of g.teams) {
-    const pct = t.w / Math.max(1, t.w + t.l)
-    const target = 1 + pct * 7.5 + (t.confChamp ? 0.8 : 0) + (t.playoff ? 0.6 : 0) + (t.champ ? 1.2 : 0)
-    t.prestige = clamp(Math.round((t.prestige + (target - t.prestige) * 0.22) * 10) / 10, 1, 10)
+    const fromRank = 9.5 - ((finalRank.get(t.id) ?? 16) - 1) * (8 / (g.teams.length - 1))
+    const target = fromRank * (1 - CONF_PULL) + confAvg[t.conf] * CONF_PULL + (t.confChamp ? 0.5 : 0) + (t.playoff ? 0.5 : 0) + (t.champ ? 1 : 0)
+    t.prestige = clamp(Math.round((t.prestige + (target - t.prestige) * PRESTIGE_DRIFT) * 10) / 10, 1, 10)
   }
   me.prestige = clamp(Math.round((me.prestige + met * AD_PRESTIGE) * 10) / 10, 1, 10)
   report.prestigeAfter = me.prestige
@@ -1165,6 +1170,10 @@ export const pipelineBoost = (g: State) => Math.min(0.3, pipelinePicks(g) * 0.03
 export type GoalKind = 'wins' | 'conf' | 'confWins' | 'rank' | 'recruits'
 export interface Goal { kind: GoalKind; target: number; text: string }
 export interface AD { goals: Goal[]; strikes: number; bonus: number }
+/** How far prestige moves toward its target each offseason. */
+const PRESTIGE_DRIFT = 0.22
+/** Share of the prestige target that comes from the conference average. */
+const CONF_PULL = 0.3
 export const AD_STRIKES = 3
 export const AD_GOALS_TO_PASS = 2
 export const AD_PRESTIGE = 0.15

@@ -58,6 +58,7 @@ Plain functions that mutate one `State` object. The UI keeps that object in a Sv
 - **Game sim**: `playGame()` plays 22 alternating drives. Your games keep a drive log with named players (`Game.log`), both plans and a player of the game (`playerOfGame()`).
 - **Facilities**: weight room, recruiting lounge, stadium and medical center, levels 0 to 5 (`g.facilities`), paid with booster money (`g.boosters`, from `boosterIncome()` on signing day). The next level costs `facilityCost()`.
 - **Pro draft**: `runDraft()` on signing day takes the top 24 seniors and declaring juniors (`EARLY_OVR`, `EARLY_CHANCE`) league-wide. `g.drafts` keeps the last 6. Your picks in the last 3 drafts add 3% recruiting interest each (`pipelineBoost()`, up to 30%). `draftWatch()` projects your picks.
+- **Conference tiers**: schools start in tiers by conference (`CONF_TIERS`): the Gulf Coast is the power conference (avg prestige about 7), then the Heartland 8 (about 5.5), the Pacific Frontier (about 4) and the Ridge Conference of small schools (about 2.6). Each offseason, prestige moves toward a target that is 70% final national rank and 30% the conference's average (`CONF_PULL`), so the tiers last but a winning small school still climbs.
 - **Offseason**: `advanceOffseason()` moves prestige toward a target based on results, graduates seniors, develops players, signs recruits, fills empty starter slots with walk-ons and builds the next schedule.
 - **Editing**: `editTeam()`, `renameConf()`, `swapConference()` (only before week 1 is played, rebuilds the schedule).
 - **Settings**: `g.settings` holds recruiting difficulty and injury rate. Older saves without it fall back to `DEFAULT_SETTINGS`.
@@ -74,7 +75,7 @@ All in `game.ts`:
 | Interest per action | `recruitAction()`, `base` and `resist` |
 | Rival poaching rate | `recruitingTick()` |
 | Injury rate | `applySnaps()`, `0.014` per full game |
-| Prestige drift | `advanceOffseason()`, the `0.22` step and `target` formula |
+| Prestige drift | `PRESTIGE_DRIFT`, `CONF_PULL` and the `target` formula in `advanceOffseason()` |
 | Score spread | `simScore()` |
 | Portal entry odds, budget, limits | `PORTAL_ENTER`, `PORTAL_POINTS`, `MAX_TRANSFERS`, `MAX_PORTAL_OFFERS`, `PORTAL_COST` |
 | Playing-time expectations | `expectedShare()` |

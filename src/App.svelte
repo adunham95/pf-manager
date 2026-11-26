@@ -268,6 +268,11 @@
     G.releasePlayer(g!, id); releaseId = null
   }
 
+  // setup screen: strongest conference first
+  const confOrder = [0, 1, 2, 3].sort((a, b) => {
+    const avg = (c: number) => G.SCHOOL_LIST.filter(s => s.conf === G.SCHOOL_LIST[c * 8].conf).reduce((n, s) => n + s.prestige, 0)
+    return avg(b) - avg(a)
+  })
   const starStr = (n: number) => '★'.repeat(n) + '☆'.repeat(5 - n)
   const initials = (p: { first: string; last: string }) => p.first[0] + p.last[0]
   const typeTag: Record<string, string> = { cupcake: 'Cupcake', nonconf: 'Non-conference', conf: 'Conference', ccg: 'Conference title', semi: 'Playoff semifinal', final: 'National title' }
@@ -294,32 +299,28 @@
 {/snippet}
 
 {#snippet playerRow(p: Player, slot: Pos, isStarter: boolean)}
-  <div class="prow" class:sel={playerSel === p.id} class:hurt={p.inj} class:target={isStarter && swapFrom !== null && me?.roster.find(x => x.id === swapFrom)?.pos === p.pos} class:picked={swapFrom === p.id}>
+  {@const swapTarget = isStarter && swapFrom !== null && me?.roster.find(x => x.id === swapFrom)?.pos === p.pos}
+  <button class="prow" class:sel={playerSel === p.id} class:hurt={p.inj} class:target={swapTarget} class:picked={swapFrom === p.id}
+    onclick={() => swapTarget ? doSwap(p.id) : (playerSel = playerSel === p.id ? null : p.id)}
+    aria-expanded={swapTarget ? undefined : playerSel === p.id}>
     <span class="pill {slot}">{slot}</span>
     <span class="avatar" style="--c:{me?.color}">{initials(p)}</span>
-    <button class="who linkish" onclick={() => (playerSel = playerSel === p.id ? null : p.id)} aria-expanded={playerSel === p.id}>
-      <div class="pname">{p.first[0]}. {p.last} {#if p.lock}<span class="tag">Set</span>{/if}</div>
-      <div class="psub">{G.YEARS[p.year]} · <span class="dev {p.dev}">{p.dev} dev</span>{#if p.trait}{' · '}<span class="trait" class:bad={!G.TRAITS[p.trait].good}>{p.trait}</span>{/if} · {p.snaps} snaps{#if p.walkOn} · walk-on{/if}</div>
-    </button>
-    <div class="tags">
+    <span class="who">
+      <span class="pname">{p.first[0]}. {p.last} {#if p.lock}<span class="tag">Set</span>{/if}</span>
+      <span class="psub">{G.YEARS[p.year]} · <span class="dev {p.dev}">{p.dev} dev</span>{#if p.trait}{' · '}<span class="trait" class:bad={!G.TRAITS[p.trait].good}>{p.trait}</span>{/if} · {p.snaps} snaps{#if p.walkOn} · walk-on{/if}</span>
+    </span>
+    <span class="tags">
       {#if p.inj}<span class="tag out">Out {p.inj}w</span>{/if}
       {#if g?.focus.includes(p.id)}<span class="tag train">Training</span>{/if}
       {#if g?.phase === 'season'}
         {@const m = moodOf.get(p.id)}
         {#if m && (m.mood === 'Unhappy' || m.mood === 'Wants out')}<span class="tag mood {m.mood === 'Wants out' ? 'out' : 'low'}" title="Playing {pct(m.share)} of snaps, expects {pct(m.expect)}">{m.mood}</span>{/if}
       {/if}
-    </div>
-    <div class="nums"><b>{Math.round(p.ovr)}</b><small>POT {G.grade(p.pot)}</small></div>
-    <div class="acts">
-      {#if isStarter && swapFrom !== null && me?.roster.find(x => x.id === swapFrom)?.pos === p.pos}
-        <button class="btn sm primary" onclick={() => doSwap(p.id)}>Swap in</button>
-      {:else if !isStarter && !p.inj}
-        <button class="btn sm" class:on={swapFrom === p.id} onclick={() => (swapFrom = swapFrom === p.id ? null : p.id)}>{swapFrom === p.id ? 'Cancel' : 'Start'}</button>
-      {/if}
-      <button class="btn sm" class:on={g?.focus.includes(p.id)} onclick={() => G.toggleFocus(g!, p.id)}>Train</button>
-      {#if !isStarter}<button class="btn sm danger" onclick={() => release(p.id)}>{releaseId === p.id ? 'Sure?' : 'Cut'}</button>{/if}
-    </div>
-  </div>
+      {#if swapTarget}<span class="tag swapin">Swap in</span>{:else if swapFrom === p.id}<span class="tag train">Picked</span>{/if}
+    </span>
+    <span class="nums"><b>{Math.round(p.ovr)}</b><small>POT {G.grade(p.pot)}</small></span>
+    <span class="chev" aria-hidden="true">{playerSel === p.id ? '▾' : '▸'}</span>
+  </button>
   {#if playerSel === p.id}<div class="rinline">{@render playerCard(p, isStarter)}</div>{/if}
 {/snippet}
 
@@ -568,12 +569,14 @@
   <main class="setup">
     <div class="brand big">PIXEL <b>FOOTBALL</b> <span>Manager</span></div>
     <h1>Pick your program</h1>
-    <p class="muted">Higher prestige recruits easier. Lower prestige is a longer climb.</p>
+    <p class="muted">Higher prestige recruits easier. Lower prestige is a longer climb. Conferences aren't equal: the power conference is stacked, and small schools are a rebuild.</p>
     <div class="confgrid">
-      {#each [0, 1, 2, 3] as c}
+      {#each confOrder as c}
         {@const conf = G.SCHOOL_LIST[c * 8].conf}
+        {@const members = G.SCHOOL_LIST.filter(s => s.conf === conf)}
         <section class="card">
           <h3>{conf}</h3>
+          <div class="tierline"><span class="tag tier{c}">{G.CONF_TIERS[c]}</span><span class="muted small">Avg prestige {(members.reduce((n, s) => n + s.prestige, 0) / members.length).toFixed(1)}</span></div>
           {#each G.SCHOOL_LIST.filter(s => s.conf === conf).sort((a, b) => b.prestige - a.prestige) as s}
             <button class="pick" onclick={() => start(s.i)}>
               <span class="badge md" style="--c:{s.color}">{s.school.slice(0, 3).toUpperCase()}</span>
@@ -686,7 +689,10 @@
               <h3>Starting lineup</h3>
               <button class="btn sm" onclick={() => G.autoLineup(g!)}>Auto set</button>
             </div>
-            {#if swapFrom !== null}<div class="hint inset">Pick the starter to swap out.</div>{/if}
+            {#if swapFrom !== null}
+              {@const sp = me.roster.find(x => x.id === swapFrom)}
+              <div class="hint inset swaphint"><span class="grow">Tap the {sp?.pos} starter {sp ? `${sp.first[0]}. ${sp.last}` : ''} replaces.</span><button class="btn sm" onclick={() => (swapFrom = null)}>Cancel</button></div>
+            {/if}
             {#each lineup as slot}
               {#if slot.p}
                 {@render playerRow(slot.p, slot.pos, true)}
