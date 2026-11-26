@@ -37,6 +37,8 @@ export interface Game {
   seeds?: [number, number]
   /** Your home games: crowd size, and fan meter change after the game. */
   attendance?: number; fanDelta?: number
+  /** Rivalry Week: index into g.rivalries. */
+  rivalry?: number
 }
 export interface Recruit {
   id: number; first: string; last: string; pos: Pos; stars: number
@@ -95,6 +97,8 @@ export interface State {
   /** Booster money in $M, spent on facilities. */
   boosters?: number
   drafts?: DraftClass[]
+  /** One in-conference rival per team, played every year in Rivalry Week for a trophy. */
+  rivalries?: Rivalry[]
 }
 
 // ---------- Skills ----------
@@ -181,7 +185,7 @@ function rollTrait(): Trait | undefined {
 }
 
 // ---------- Weekly recap ----------
-export type RecapKind = 'injury' | 'commit' | 'lost' | 'visit' | 'goal' | 'league' | 'trait' | 'info' | 'spotlight' | 'bowl' | 'award'
+export type RecapKind = 'injury' | 'commit' | 'lost' | 'visit' | 'goal' | 'league' | 'trait' | 'info' | 'spotlight' | 'bowl' | 'award' | 'rivalry'
 export interface Recap {
   week: number; label: string; rankBefore: number; rankAfter: number
   result?: { opp: number; my: number; their: number; win: boolean; home: boolean; type: GameType; spotlight?: boolean; fanDelta?: number; attendance?: number }
@@ -329,6 +333,7 @@ export function newGame(userIndex: number, seed = Date.now()): State {
     roster: [...SLOTS, ...AI_BENCH].map(pos => makePlayer(g, pos, 1, ri(1, 4), true)),
     w: 0, l: 0, cw: 0, cl: 0,
   }))
+  g.rivalries = makeRivalries(g)
   g.schedule = makeSchedule(g)
   g.recruits = makeRecruits(g)
   g.staff = (['assistant', 'oc', 'dc'] as Role[]).map(r => makeCoach(g, r, 1))
@@ -340,6 +345,91 @@ export function newGame(userIndex: number, seed = Date.now()): State {
   return g
 }
 export const SCHOOL_LIST = SCHOOLS.map(([school, mascot, , color, p], i) => ({ i, school, mascot, color, prestige: p, conf: CONFS[Math.floor(i / 8)] }))
+
+// ---------- Rivalries ----------
+/** Made-up trophies for the rivalry games. */
+export const TROPHIES: { name: string; icon: string }[] = [
+  { name: 'Copper Kettle', icon: '🫖' }, { name: 'Brass Weathervane', icon: '🧭' }, { name: 'Lighthouse Lamp', icon: '🏮' },
+  { name: 'Rusty Anchor', icon: '⚓' }, { name: 'Silver Spur', icon: '🐎' }, { name: 'Mason Jar', icon: '🫙' },
+  { name: 'Broken Paddle', icon: '🛶' }, { name: 'Peach Basket', icon: '🍑' }, { name: 'Tin Rooster', icon: '🐓' },
+  { name: 'River Stone', icon: '🪨' }, { name: 'Rail Spike', icon: '🚂' }, { name: 'Oyster Shell', icon: '🦪' },
+  { name: 'Pine Cone Cup', icon: '🌲' }, { name: 'Lucky Horseshoe', icon: '🍀' }, { name: 'Old Fiddle', icon: '🎻' },
+  { name: 'Cornhusk Crown', icon: '🌽' },
+]
+export interface Rivalry {
+  a: number; b: number; trophy: number
+  /** All-time series, a's wins first. Starts with a made-up history. */
+  wins: [number, number]
+  /** Team holding the trophy, and how many straight it has won. */
+  holder: number; streak: number
+  last?: { year: number; winner: number; score: string }
+}
+/** Rivalry Week: the last week of conference play. */
+export const RIVALRY_WEEK = 11
+/** In a rivalry game the weaker team plays above itself: this much added to its offense and defense. */
+export const RIVAL_UNDERDOG = 2.5
+/** Extra fan meter swing for winning or losing your rivalry game. */
+const RIVAL_FANS = 5
+/** Interest added to undecided recruits your rival is chasing when you beat them. */
+const RIVAL_RECRUIT = 4
+
+function fakeSeries(g: State, a: number, b: number, trophy: number): Rivalry {
+  const games = ri(70, 120)
+  const share = clamp(0.5 + (g.teams[a].prestige - g.teams[b].prestige) * 0.03 + (rnd() - 0.5) * 0.12, 0.3, 0.7)
+  const aw = Math.round(games * share)
+  const holder = rnd() < share ? a : b
+  return { a, b, trophy, wins: [aw, games - aw], holder, streak: ri(1, 4) }
+}
+/** Pairs every team with a rival in its own conference. */
+function makeRivalries(g: State): Rivalry[] {
+  const out: Rivalry[] = []
+  const trophies = shuffle(TROPHIES.map((_, i) => i))
+  for (let c = 0; c < g.confNames.length; c++) {
+    const ids = shuffle(g.teams.filter(t => t.conf === c).map(t => t.id))
+    for (let i = 0; i + 1 < ids.length; i += 2) out.push(fakeSeries(g, ids[i], ids[i + 1], trophies[out.length % trophies.length]))
+  }
+  return out
+}
+/** After realignment, rivals in different conferences get new in-conference rivals (and a fresh made-up history). */
+function fixRivalries(g: State) {
+  const rv = g.rivalries ?? []
+  const broken = rv.filter(r => g.teams[r.a].conf !== g.teams[r.b].conf)
+  if (!broken.length) return
+  const keep = rv.filter(r => !broken.includes(r))
+  const freeTrophies = broken.map(r => r.trophy)
+  const loose = broken.flatMap(r => [r.a, r.b])
+  for (let c = 0; c < g.confNames.length; c++) {
+    const ids = loose.filter(id => g.teams[id].conf === c)
+    for (let i = 0; i + 1 < ids.length; i += 2) keep.push(fakeSeries(g, ids[i], ids[i + 1], freeTrophies.shift() ?? 0))
+  }
+  g.rivalries = keep
+}
+export function rivalryOf(g: State, id: number) {
+  const i = (g.rivalries ?? []).findIndex(r => r.a === id || r.b === id)
+  return i < 0 ? null : { i, r: g.rivalries![i], rival: (g.rivalries![i].a === id ? g.rivalries![i].b : g.rivalries![i].a) }
+}
+export const trophyName = (r: Rivalry) => `the ${TROPHIES[r.trophy].name}`
+/** One line on the series from a team's side: "Leads 52-47", "Trails", "Tied". */
+export function seriesText(g: State, r: Rivalry, id: number) {
+  const mine = r.a === id ? r.wins[0] : r.wins[1], theirs = r.a === id ? r.wins[1] : r.wins[0]
+  return mine === theirs ? `Series tied ${mine}-${theirs}` : `${mine > theirs ? 'You lead' : 'You trail'} the series ${mine}-${theirs}`
+}
+function settleRivalry(g: State, gm: Game) {
+  const r = g.rivalries?.[gm.rivalry ?? -1]
+  if (!r || !gm.played) return
+  const w = gm.hs! > gm.as! ? gm.home : gm.away
+  if (w === r.a) r.wins[0]++; else r.wins[1]++
+  r.streak = r.holder === w ? r.streak + 1 : 1
+  const kept = r.holder === w
+  r.holder = w
+  r.last = { year: g.year, winner: w, score: `${Math.max(gm.hs!, gm.as!)}-${Math.min(gm.hs!, gm.as!)}` }
+  const t = TROPHIES[r.trophy], wt = team(g, w), lt = team(g, w === r.a ? r.b : r.a)
+  if (w === g.user || lt.id === g.user) {
+    log(g, 'rivalry', w === g.user
+      ? `${t.icon} ${kept ? `You kept ${trophyName(r)}` : `You took back ${trophyName(r)}`} from ${lt.school}!${r.streak >= 3 ? ` That's ${r.streak} in a row.` : ''}`
+      : `${t.icon} ${wt.school} ${kept ? 'kept' : 'took'} ${trophyName(r)}. It stays in their trophy case for a year.`)
+  }
+}
 
 function makeSchedule(g: State): Game[] {
   const games: Game[] = []
@@ -355,14 +445,22 @@ function makeSchedule(g: State): Game[] {
       confs[x].forEach((tid, i) => { const home = rnd() < 0.5; games.push({ week, home: home ? tid : ys[i], away: home ? ys[i] : tid, type: 'nonconf', played: false }) })
     }
   }
-  // conference round robin, weeks 5 to 11 (circle method)
+  // conference round robin, weeks 5 to 11 (circle method). Rivals sit opposite each other, so they meet in the
+  // first round, which is played last: Rivalry Week.
+  const rv = g.rivalries ?? []
   for (const conf of confs) {
-    const arr = shuffle([...conf])
+    const pairs = rv.filter(r => conf.includes(r.a) && conf.includes(r.b))
+    const paired = new Set(pairs.flatMap(r => [r.a, r.b]))
+    const rest = shuffle(conf.filter(id => !paired.has(id)))
+    const left = [...pairs.map(r => r.a), ...rest.slice(0, rest.length / 2)], right = [...pairs.map(r => r.b), ...rest.slice(rest.length / 2)]
+    const arr = [...left, ...right.reverse()]
     for (let r = 0; r < 7; r++) {
       for (let i = 0; i < 4; i++) {
         const a = arr[i], b = arr[7 - i]
         const home = (r + i) % 2 === 0
-        games.push({ week: 5 + r, home: home ? a : b, away: home ? b : a, type: 'conf', played: false })
+        const week = RIVALRY_WEEK - r
+        const ri2 = r === 0 ? rv.findIndex(x => (x.a === a && x.b === b) || (x.a === b && x.b === a)) : -1
+        games.push({ week, home: home ? a : b, away: home ? b : a, type: 'conf', played: false, ...(ri2 >= 0 ? { rivalry: ri2 } : {}) })
       }
       arr.splice(1, 0, arr.pop()!)
     }
@@ -860,7 +958,13 @@ export function simWeek(g: State) {
     const weather = weatherOf(g, gm)
     const myPlan = g.plan ?? DEFAULT_PLAN
     const hp = userHome ? myPlan : aiPlan(h, a, true, weather), ap = userAway ? myPlan : aiPlan(a, h, true, weather)
-    const res = playGame({ team: h, blend: hb, boost: gameDayBoost(g, h, big), plan: hp }, { team: a, blend: ab, boost: gameDayBoost(g, a, big), plan: ap }, homeAdv, isUser, weather)
+    const hBoost = gameDayBoost(g, h, big), aBoost = gameDayBoost(g, a, big)
+    // Rivalry games: throw out the records. The weaker team plays above itself.
+    if (gm.rivalry !== undefined) {
+      const dog = teamRatings(h).ovr < teamRatings(a).ovr ? hBoost : aBoost
+      dog.off += RIVAL_UNDERDOG; dog.def += RIVAL_UNDERDOG
+    }
+    const res = playGame({ team: h, blend: hb, boost: hBoost, plan: hp }, { team: a, blend: ab, boost: aBoost, plan: ap }, homeAdv, isUser, weather)
     const hs = res.hs, as = res.as
     gm.hs = hs; gm.as = as; gm.played = true
     if (isUser) {
@@ -873,6 +977,7 @@ export function simWeek(g: State) {
     if (gm.type === 'conf') { if (hw) { h.cw++; a.cl++ } else { a.cw++; h.cl++ } }
     if (gm.type === 'ccg') (hw ? h : a).confChamp = true
     if (gm.type === 'final') { const c = hw ? h : a; c.champ = true; g.champion = c.id }
+    settleRivalry(g, gm)
     const im = INJ_MULT[settingsOf(g).injuries]
     const med = facilityLevel(g, 'medical')
     const userInj = im * (1 - med * 0.12), heal = Math.floor(med / 2)
@@ -887,7 +992,12 @@ export function simWeek(g: State) {
       const oppRanked = (oppRank.get(opp.id) ?? 99) <= TOP_N
       const fanDelta = fanSwing(win, userHome, oppRanked, !!gm.spotlight, gm.type === 'cupcake', Math.abs(my - their))
       if (userHome && !neutral) gm.attendance = attendanceFor(g, !!gm.spotlight)
-      const bonusFans = win && gm.type === 'bowl' ? 3 : win && (gm.type === 'quarter' || gm.type === 'semi') ? 4 : 0
+      const bonusFans = win && gm.type === 'bowl' ? 3 : win && (gm.type === 'quarter' || gm.type === 'semi') ? 4 : gm.rivalry !== undefined ? (win ? RIVAL_FANS : -RIVAL_FANS) : 0
+      if (gm.rivalry !== undefined && win) {
+        let n = 0
+        for (const r of g.recruits) if (r.committed === null && r.rivalTeam === opp.id && (r.offered || r.interest >= 15)) { r.interest += RIVAL_RECRUIT; n++ }
+        if (n) log(g, 'rivalry', `${n} recruit${n > 1 ? 's' : ''} ${opp.school} is chasing took notice of the win (+${RIVAL_RECRUIT} interest).`)
+      }
       g.fans = clamp(fansOf(g) + fanDelta + bonusFans, 0, 100)
       gm.fanDelta = fanDelta + bonusFans
       if (gm.type === 'bowl') {
@@ -1968,6 +2078,7 @@ export function swapConference(g: State, a: number, b: number) {
   if (ta.conf === tb.conf) return 'Those schools are already in the same conference.'
   ;[ta.conf, tb.conf] = [tb.conf, ta.conf]
   setSeed(g.seed)
+  fixRivalries(g)
   g.schedule = makeSchedule(g)
   g.seed = getSeed()
   g.news.unshift(`Realignment: ${ta.school} moves to the ${g.confNames[ta.conf]}, ${tb.school} moves to the ${g.confNames[tb.conf]}.`)

@@ -747,3 +747,19 @@ input[type=color] { width: 36px; height: 32px; border: 1px solid var(--line); bo
 .face.lg { width: 64px; height: 64px; border-radius: 16px; }
 .posline { display: flex; align-items: center; gap: 8px; margin-top: 2px; }
 .posline .pill { margin: 0; }
+
+/* rivalries */
+.rivalbanner { background: linear-gradient(90deg, #3b1d0e, #6b2f14); color: #fff; }
+.rivalbanner .bowlname { color: #ffd27a; }
+.rivalnote { font-size: 12px; color: #f3c9a8; }
+.rivalcard { display: flex; gap: 16px; align-items: center; margin-bottom: 16px;
+  background: linear-gradient(120deg, color-mix(in srgb, #ffd27a 16%, var(--card)), var(--card) 60%); }
+.rivalcard h3 { font-size: 26px; margin: 2px 0 6px; }
+.rivalcard p { margin: 8px 0 0; }
+.trophy { flex: none; display: grid; place-items: center; width: 84px; height: 84px; border-radius: 18px; font-size: 44px;
+  background: var(--soft); filter: grayscale(.85); opacity: .7; }
+.trophy.mine { filter: none; opacity: 1; background: color-mix(in srgb, #ffd27a 35%, var(--card)); box-shadow: 0 0 0 2px #e9b949, 0 6px 18px rgba(233, 185, 73, .35);
+  animation: trophyglow 2.4s ease-in-out infinite alternate; }
+@keyframes trophyglow { to { box-shadow: 0 0 0 2px #e9b949, 0 6px 26px rgba(233, 185, 73, .6); } }
+.rivalvs { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+@media (prefers-reduced-motion: reduce) { .trophy.mine { animation: none; } }

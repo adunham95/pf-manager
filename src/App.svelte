@@ -155,7 +155,9 @@
   const weather = $derived(g && next ? G.weatherOf(g, next) : null)
   const fans = $derived(g ? G.fansOf(g) : 50)
   const homeRating = $derived(next && g && site !== 'neutral' ? G.homeEdgeRating(g, next.home, mySpot) : 0)
-  const prob = $derived(myR && oppR ? G.winProb(myOvr + (site === 'home' ? homeRating : site === 'away' ? -homeRating : 0), oppOvr) : 0.5)
+  // Rivalry games: the weaker side gets the underdog boost, so the odds bar tightens.
+  const rivalEdge = $derived(next && next.rivalry !== undefined ? (myOvr < oppOvr ? G.RIVAL_UNDERDOG : -G.RIVAL_UNDERDOG) : 0)
+  const prob = $derived(myR && oppR ? G.winProb(myOvr + rivalEdge + (site === 'home' ? homeRating : site === 'away' ? -homeRating : 0), oppOvr) : 0.5)
   const SITE_LABEL = { home: 'Home', away: 'Away', neutral: 'Neutral site' }
   const siteOf = (gm: Game): 'home' | 'away' | 'neutral' => G.isNeutral(gm) ? 'neutral' : gm.home === g!.user ? 'home' : 'away'
   const siteCount = $derived.by(() => {
@@ -196,7 +198,12 @@
   const recruitingOpen = $derived(!!g && g.phase === 'season' && g.week <= G.REGULAR_WEEKS)
   const weekLabel = $derived(!g ? '' : g.phase === 'offseason' ? 'Offseason' : G.weekName(g.week))
   /** A game's label, with the bowl's name for bowl games. */
-  const gameTag = (gm: Game) => gm.type === 'bowl' ? `${G.BOWLS[gm.bowl ?? 0].icon} ${G.BOWLS[gm.bowl ?? 0].name}` : typeTag[gm.type]
+  const rivalryAt = (gm: Game) => gm.rivalry !== undefined ? g?.rivalries?.[gm.rivalry] ?? null : null
+  const gameTag = (gm: Game) => {
+    const rv = rivalryAt(gm)
+    return gm.type === 'bowl' ? `${G.BOWLS[gm.bowl ?? 0].icon} ${G.BOWLS[gm.bowl ?? 0].name}` : rv ? `${G.TROPHIES[rv.trophy].icon} Rivalry: ${G.TROPHIES[rv.trophy].name}` : typeTag[gm.type]
+  }
+  const myRivalry = $derived(g ? G.rivalryOf(g, g.user) : null)
   // postseason views
   const proj = $derived(g && tab === 'postseason' ? G.projectPostseason(g) : null)
   const myProjection = $derived.by(() => {
@@ -293,7 +300,7 @@
   const budget = $derived(g ? G.staffBudget(g) : 0)
   const pay = $derived(g ? G.payroll(g) : 0)
   function hire(id: number) { if (g) flash(G.hireCoach(g, id)) }
-  const RECAP_ICON: Record<G.RecapKind, string> = { injury: '✚', commit: '★', lost: '✕', visit: '⌂', goal: '✓', league: '🏆', trait: '⚡', info: '•', spotlight: '📺', bowl: '', award: '🏈' }
+  const RECAP_ICON: Record<G.RecapKind, string> = { injury: '✚', commit: '★', lost: '✕', visit: '⌂', goal: '✓', league: '🏆', trait: '⚡', info: '•', spotlight: '📺', bowl: '', award: '🏈', rivalry: '' }
   const traitTag = (t?: G.Trait) => t ? G.TRAITS[t] : null
   // live signing day: pending (hats on the table), spinning (the pause), result (the pick)
   let sdPhase = $state<'pending' | 'spinning' | 'result'>('pending')
@@ -363,7 +370,7 @@
   let watching = $state<{ game: Game; label: string } | null>(null)
   function watchGame() {
     if (!g) return
-    const wk = g.week, label = `${weekLabel} · ${next ? typeTag[next.type] : ''}`, user = g.user
+    const wk = g.week, label = `${weekLabel} · ${next ? gameTag(next) : ''}`, user = g.user
     sim()
     const gm = g.schedule.find(x => x.week === wk && x.played && (x.home === user || x.away === user))
     if (gm?.log?.length) watching = { game: gm, label }
@@ -829,6 +836,12 @@
               {#if next.type === 'bowl'}
                 {@const b = G.BOWLS[next.bowl ?? 0]}
                 <div class="bowlbanner"><span class="bowlname">{b.icon} {b.name}</span><span>{b.tradition}</span></div>
+              {:else if rivalryAt(next)}
+                {@const rv = rivalryAt(next)!}
+                {@const tr = G.TROPHIES[rv.trophy]}
+                <div class="bowlbanner rivalbanner"><span class="bowlname">{tr.icon} Rivalry Week · Battle for {G.trophyName(rv)}</span>
+                  <span>{rv.holder === g.user ? `You hold it${rv.streak > 1 ? `, ${rv.streak} years running` : ''}. Don't give it back.` : `${G.team(g, rv.holder).school} has it${rv.streak > 1 ? ` (${rv.streak} straight)` : ''}. Go take it.`} {G.seriesText(g, rv, g.user)}.</span>
+                  <span class="rivalnote">Throw out the records: the underdog always plays up in this one.</span></div>
               {:else if next.seeds}
                 <div class="bowlbanner playoff"><span class="bowlname">🏆 {typeTag[next.type]}</span>
                   <span>#{next.home === g.user ? next.seeds[0] : next.seeds[1]} seed vs #{next.home === g.user ? next.seeds[1] : next.seeds[0]} seed. Win or go home.</span></div>
@@ -1353,6 +1366,21 @@
       </div>
 
     {:else if tab === 'history'}
+      {#if myRivalry}
+        {@const rv = myRivalry.r}
+        {@const tr = G.TROPHIES[rv.trophy]}
+        {@const foe = G.team(g, myRivalry.rival)}
+        <section class="card rivalcard">
+          <div class="trophy" class:mine={rv.holder === g.user} aria-hidden="true">{tr.icon}</div>
+          <div class="grow">
+            <div class="eyebrow">Your rivalry · Week {G.RIVALRY_WEEK}</div>
+            <h3>The {tr.name}</h3>
+            <div class="rivalvs">{@render badge(me, 'sm')} vs {@render badge(foe, 'sm')} <b>{foe.school} {foe.mascot}</b></div>
+            <p class="small">{rv.holder === g.user ? `It's in your trophy case${rv.streak > 1 ? `: ${rv.streak} straight` : ''}.` : `${foe.school} holds it${rv.streak > 1 ? `: ${rv.streak} straight` : ''}.`} {G.seriesText(g, rv, g.user)}.
+              {#if rv.last}Last game ({rv.last.year}): {G.team(g, rv.last.winner).school} won {rv.last.score}.{/if}</p>
+          </div>
+        </section>
+      {/if}
       <section class="card flush">
         <div class="cardhead"><h3>Program history</h3></div>
         {#if g.history.length === 0}<p class="muted pad">Finish a season to start your history.</p>{/if}
@@ -1360,6 +1388,17 @@
           <div class="srow"><span class="wk">{h.year}</span><b class="grow">{h.finish}</b><span>{h.record}</span><span class="muted small">Prestige {h.prestige}</span></div>
         {/each}
       </section>
+      {#if g.rivalries?.length}
+        <section class="card flush draftboard">
+          <div class="cardhead"><h3>Trophy games</h3><span class="muted small">Played in week {G.RIVALRY_WEEK}</span></div>
+          {#each g.rivalries as rv}
+            {@const tr = G.TROPHIES[rv.trophy]}
+            <div class="srow" class:current={rv.a === g.user || rv.b === g.user}><span class="wk">{tr.icon}</span>
+              <div class="grow"><b>{tr.name}</b><div class="muted small">{G.team(g, rv.a).school} vs {G.team(g, rv.b).school} · series {Math.max(...rv.wins)}-{Math.min(...rv.wins)}</div></div>
+              <span class="muted small">Held by</span>{@render badge(G.team(g, rv.holder), 'sm')}</div>
+          {/each}
+        </section>
+      {/if}
       {#if g.awards?.length}
         <section class="card flush draftboard">
           <div class="cardhead"><h3>🏈 {G.HELMET} winners</h3></div>
