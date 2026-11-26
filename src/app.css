@@ -395,6 +395,49 @@ button.skillrow:not(:disabled):hover { border-color: var(--blue); }
 .crash-card pre { white-space: pre-wrap; word-break: break-word; background: var(--soft); padding: 10px; border-radius: 8px; margin: 8px 0 0; font-size: 12px; }
 .crash-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 
+/* game plan sliders */
+.lean { width: 100%; accent-color: var(--blue); margin: 4px 0 0; height: 28px; }
+.lean.def { accent-color: var(--hot); }
+.leanlabels { display: grid; grid-template-columns: 1fr auto 1fr; align-items: baseline; gap: 8px; font-size: 12px; color: var(--muted); }
+.leanlabels span:last-child { text-align: right; }
+.leanlabels b { font-size: 13px; color: var(--ink); text-align: center; }
+
+/* postseason */
+.bowlbanner { display: grid; gap: 2px; margin: -4px 0 12px; padding: 10px 12px; border-radius: 10px; font-size: 14px;
+  background: linear-gradient(90deg, #fff4d6, #ffe0ec); color: #5b3a00; }
+.bowlbanner.playoff { background: linear-gradient(90deg, #111827, #1f2a44); color: #fff; }
+.bowlname { font-family: 'Pixelify Sans', monospace; font-weight: 700; font-size: 16px; }
+.bowlbanner.playoff .bowlname { color: #f5c46a; }
+.postgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 16px; margin-bottom: 16px; align-items: start; }
+.bracketcard { grid-column: 1 / -1; }
+.bracket { display: grid; grid-template-columns: repeat(3, minmax(170px, 1fr)); gap: 16px; padding: 12px 16px 16px; overflow-x: auto; }
+.round { display: grid; grid-template-rows: auto 1fr; gap: 8px; }
+.rgames { display: grid; gap: 10px; align-content: space-around; }
+.bgame { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; font-size: 13px; }
+.bgame.me { border-color: var(--blue); }
+.bgame.tbd { padding: 10px; text-align: center; }
+.bteam { display: flex; align-items: center; gap: 6px; padding: 4px 6px; }
+.bteam + .bteam { border-top: 1px solid var(--line); }
+.bteam .badge.sm { width: 22px; height: 22px; font-size: 8px; border-radius: 5px; }
+.bteam .seed { width: 14px; color: var(--muted); font-weight: 700; font-size: 11px; }
+.bteam .grow { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bteam.won { font-weight: 700; }
+.bteam.lost { color: var(--muted); }
+.helmetwin { display: flex; align-items: center; gap: 12px; padding: 14px 16px; background: linear-gradient(90deg, #fff4d6, transparent); }
+.hrow { display: grid; grid-template-columns: auto auto 1fr; align-items: baseline; gap: 10px; padding: 8px 16px; border-top: 1px solid var(--line); font-size: 14px; }
+.hrow.me { background: color-mix(in srgb, var(--blue) 9%, transparent); }
+.hrow .rnum { font-size: 16px; width: 18px; }
+.bowlrow { display: flex; align-items: center; gap: 10px; padding: 8px 16px; border-top: 1px solid var(--line); }
+.bowlrow.me { background: color-mix(in srgb, var(--blue) 9%, transparent); }
+.bowlicon { font-size: 20px; }
+.bowlrow .win { font-weight: 700; color: var(--win); }
+.tag.award { background: #fff4d6; color: #8a5200; }
+.seasonstats { display: grid; gap: 2px; padding: 10px 12px; border-radius: 10px; background: var(--soft); }
+
+.cchamp { font-style: normal; font-size: 9px; font-weight: 800; margin-left: 5px; padding: 0 4px; border-radius: 4px; background: #f5c46a; color: #5b3a00; vertical-align: 1px; }
+.myproj { font-size: 18px; font-weight: 700; margin: 8px 0 4px; }
+.bubblehead { padding: 10px 16px 4px; border-top: 1px solid var(--line); }
+
 /* rankings */
 .ranklayout { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 4fr); gap: 16px; align-items: start; margin-bottom: 16px; }
 .rk { color: var(--muted); font-weight: 600; font-size: .85em; }

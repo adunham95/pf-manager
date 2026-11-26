@@ -16,7 +16,7 @@
     return s as State
   }
   let g = $state<State | null>(load())
-  type Tab = 'team' | 'recruits' | 'portal' | 'program' | 'schedule' | 'league' | 'history' | 'settings'
+  type Tab = 'team' | 'recruits' | 'portal' | 'program' | 'schedule' | 'postseason' | 'league' | 'history' | 'settings'
   let tab = $state<Tab>('team')
   let toast = $state('')
   let posFilter = $state<'ALL' | Pos>('ALL')
@@ -124,7 +124,7 @@
   const d = $derived(me ? G.depth(me) : null)
   const myR = $derived(me && g ? G.teamRatings(me, next ? g.rotation : 0) : null)
   const oppR = $derived(opp ? G.teamRatings(opp, 0) : null)
-  const bigGame = $derived(!!next && (next.type === 'ccg' || next.type === 'semi' || next.type === 'final'))
+  const bigGame = $derived(!!next && G.isPostseason(next.type))
   const boostOf = (t: G.Team) => { const b = G.gameDayBoost(g!, t, bigGame); return (b.off + b.def) / 2 }
   const myOvr = $derived(me && myR ? myR.ovr + boostOf(me) : 0)
   const oppOvr = $derived(opp && oppR ? oppR.ovr + boostOf(opp) : 0)
@@ -146,9 +146,10 @@
     if (g) for (const x of g.schedule) if (x.home === g.user || x.away === g.user) c[siteOf(x)]++
     return c
   })
-  const OFF_LABEL: Record<Lean, string> = { run: 'Run-heavy', balanced: 'Balanced', pass: 'Pass-heavy' }
-  const DEF_LABEL: Record<Lean, string> = { run: 'Stop the run', balanced: 'Balanced', pass: 'Stop the pass' }
   function setPlan(k: 'off' | 'def', v: Lean) { if (g) g.plan = { ...(g.plan ?? G.DEFAULT_PLAN), [k]: v } }
+  const offText = (x: number) => `${Math.round(x * 100)}% run · ${Math.round((1 - x) * 100)}% pass`
+  const defText = (x: number) => x >= 0.7 ? 'Selling out to stop the run' : x >= 0.58 ? 'Leaning against the run'
+    : x <= 0.3 ? 'Selling out to stop the pass' : x <= 0.42 ? 'Leaning against the pass' : 'Balanced'
   let showDrives = $state(false)
   let viewGame = $state<Game | null>(null)
   function lineScore(gm: Game) {
@@ -176,8 +177,28 @@
   }
   const offers = $derived(g ? g.recruits.filter(r => r.offered && r.committed === null).length : 0)
   const recruitingOpen = $derived(!!g && g.phase === 'season' && g.week <= G.REGULAR_WEEKS)
-  const weekLabel = $derived(!g ? '' : g.phase === 'offseason' ? 'Offseason'
-    : g.week <= 12 ? `Week ${g.week}` : g.week === 13 ? 'Conference title week' : g.week === 14 ? 'Playoff semifinals' : 'National title game')
+  const weekLabel = $derived(!g ? '' : g.phase === 'offseason' ? 'Offseason' : G.weekName(g.week))
+  /** A game's label, with the bowl's name for bowl games. */
+  const gameTag = (gm: Game) => gm.type === 'bowl' ? `${G.BOWLS[gm.bowl ?? 0].icon} ${G.BOWLS[gm.bowl ?? 0].name}` : typeTag[gm.type]
+  // postseason views
+  const proj = $derived(g && tab === 'postseason' ? G.projectPostseason(g) : null)
+  const myProjection = $derived.by(() => {
+    if (!g || !proj || !me) return ''
+    const verb = proj.projected ? "You're projected" : "You're"
+    const q = proj.quarters.find(x => x.home === g!.user || x.away === g!.user)
+    if (q) { const seed = q.home === g.user ? q.seeds![0] : q.seeds![1]; return `${verb} in the playoff as the #${seed} seed${proj.champs.has(g.user) ? ', as conference champion' : ''}.` }
+    const b = proj.bowls.find(x => x.home === g!.user || x.away === g!.user)
+    if (b) return `${verb} ${proj.projected ? 'for' : 'in'} the ${G.BOWLS[b.bowl ?? 0].name} against ${G.team(g, b.home === g.user ? b.away : b.home).school}.`
+    if (!proj.projected) return "You're not in the postseason this year."
+    if (proj.firstOut.some(t => t.id === g!.user)) return "You're among the first teams out of the playoff, and on track for a bowl."
+    const pw = G.projectedWins(g, me)
+    return pw < 6 ? `You're on pace for ${pw} wins. Bowls need 6.` : "You're on pace for 6 wins but outside the projected bowls for now."
+  })
+  const quarters = $derived(g ? g.schedule.filter(x => x.type === 'quarter').sort((a, b) => a.seeds![0] - b.seeds![0]) : [])
+  const semis = $derived(g ? g.schedule.filter(x => x.type === 'semi') : [])
+  const finalGame = $derived(g ? g.schedule.find(x => x.type === 'final') : undefined)
+  const helmetNow = $derived(g ? g.awards?.find(a => a.year === g!.year) : undefined)
+  const helmetWatch = $derived(g && !helmetNow && g.schedule.some(x => x.played) ? G.helmetRace(g).slice(0, 5) : [])
 
   // lineup: 12 slots in order, then bench
   const lineup = $derived.by(() => {
@@ -253,7 +274,7 @@
   const budget = $derived(g ? G.staffBudget(g) : 0)
   const pay = $derived(g ? G.payroll(g) : 0)
   function hire(id: number) { if (g) flash(G.hireCoach(g, id)) }
-  const RECAP_ICON: Record<G.RecapKind, string> = { injury: '✚', commit: '★', lost: '✕', visit: '⌂', goal: '✓', league: '🏆', trait: '⚡', info: '•', spotlight: '📺' }
+  const RECAP_ICON: Record<G.RecapKind, string> = { injury: '✚', commit: '★', lost: '✕', visit: '⌂', goal: '✓', league: '🏆', trait: '⚡', info: '•', spotlight: '📺', bowl: '', award: '🏈' }
   const traitTag = (t?: G.Trait) => t ? G.TRAITS[t] : null
   function train(p: Player, i: number) { if (g) flash(G.setTraining(g, p.id, i)) }
   const trainName = (p: Player) => { const i = g ? G.trainingSkill(g, p.id) : null; return i === null ? null : G.SKILLS[p.pos][i] }
@@ -302,7 +323,7 @@
   })
   const starStr = (n: number) => '★'.repeat(n) + '☆'.repeat(5 - n)
   const initials = (p: { first: string; last: string }) => p.first[0] + p.last[0]
-  const typeTag: Record<string, string> = { cupcake: 'Cupcake', nonconf: 'Non-conference', conf: 'Conference', ccg: 'Conference title', semi: 'Playoff semifinal', final: 'National title' }
+  const typeTag: Record<string, string> = { cupcake: 'Cupcake', nonconf: 'Non-conference', conf: 'Conference', ccg: 'Conference title', quarter: 'Playoff quarterfinal', semi: 'Playoff semifinal', final: 'National title', bowl: 'Bowl game' }
   const ROT = [
     { v: 0, name: 'Starters', note: 'Your best lineup plays the whole game.' },
     { v: 0.25, name: 'Rotate', note: 'Backups take a quarter of the snaps and grow a little.' },
@@ -391,7 +412,7 @@
   {#if withBox}{@render boxScore(gm)}{/if}
   {#if gm.plan && gm.oppPlan}
     {@const guessed = gm.plan.def === gm.oppPlan.off}
-    <p class="muted small">You ran {OFF_LABEL[gm.plan.off].toLowerCase()} and set your defense to {DEF_LABEL[gm.plan.def].toLowerCase()}. They went {OFF_LABEL[gm.oppPlan.off].toLowerCase()}{guessed ? ', so your defense read it right.' : '.'}</p>
+    <p class="muted small">Your offense went {G.leanWord(gm.plan.off, 'off')} with a defense {G.leanWord(gm.plan.def, 'def')}. They went {G.leanWord(gm.oppPlan.off, 'off')}{Math.abs(gm.plan.def - gm.oppPlan.off) <= 0.1 ? ', so your defense read them well.' : Math.abs(gm.plan.def - gm.oppPlan.off) >= 0.3 ? ', so your defense guessed wrong.' : '.'}</p>
   {/if}
   {#if gm.log}
     <ol class="drives">
@@ -432,6 +453,19 @@
   </div>
 {/snippet}
 
+{#snippet bracketGame(x: Game, champs: Set<number> = new Set())}
+  {@const h = G.team(g!, x.home)}
+  {@const a = G.team(g!, x.away)}
+  <div class="bgame" class:me={x.home === g!.user || x.away === g!.user}>
+    {#each [[h, x.seeds?.[0], x.hs], [a, x.seeds?.[1], x.as]] as [t, sd, sc]}
+      {@const tm = t as G.Team}
+      <div class="bteam" class:won={x.played && (sc as number) > ((tm.id === x.home ? x.as : x.hs) as number)} class:lost={x.played && (sc as number) < ((tm.id === x.home ? x.as : x.hs) as number)}>
+        <span class="seed">{sd}</span>{@render badge(tm, 'sm')}<span class="grow">{tm.school}{#if champs.has(tm.id)}<em class="cchamp" title="Conference champion">C</em>{/if}</span><b>{x.played ? sc : ''}</b>
+      </div>
+    {/each}
+  </div>
+{/snippet}
+
 {#snippet traitBox(t: G.Trait)}
   <div class="traitbox" class:bad={!G.TRAITS[t].good}><b>{t}</b><span>{G.TRAITS[t].text}</span></div>
 {/snippet}
@@ -463,6 +497,7 @@
     </div>
     <div class="cardtags">
       <span class="tag">{G.YEARS[p.year]}</span>
+      {#each p.awards ?? [] as a}<span class="tag award">🏈 {a}</span>{/each}
       <span class="tag" class:ok={isStarter}>{p.inj ? `Out ${p.inj}w` : isStarter ? 'Starter' : 'Bench'}</span>
       {#if p.walkOn}<span class="tag">Walk-on</span>{/if}
       {#if p.lock}<span class="tag">Locked in lineup</span>{/if}
@@ -475,6 +510,7 @@
       <div><b class="dev {p.dev}">{p.dev}</b><small>Dev trait</small></div>
     </div>
     {#if p.trait}{@render traitBox(p.trait)}{/if}
+    {#if p.stats?.g}<div class="seasonstats"><span class="muted small">{g?.year} season · {p.stats.g} games</span><b>{G.statLine(p)}</b></div>{/if}
     <div>
       <div class="race-top small"><span class="muted">Skills · tap one to train it</span><span class="muted small">{g?.focus.length}/{G.MAX_FOCUS} training slots</span></div>
       {@render skillList(p.pos, G.skillsOf(p), p)}
@@ -654,7 +690,7 @@
   <header class="top">
     <div class="brand">PIXEL <b>FOOTBALL</b></div>
     <nav class="tabs">
-      {#each [['team', 'My Team'], ['recruits', 'Recruits'], ['portal', 'Portal'], ['program', 'Program'], ['schedule', 'Schedule'], ['league', 'League'], ['history', 'History'], ['settings', 'Settings']] as [k, l]}
+      {#each [['team', 'My Team'], ['recruits', 'Recruits'], ['portal', 'Portal'], ['program', 'Program'], ['schedule', 'Schedule'], ['league', 'League'], ['postseason', 'Postseason'], ['history', 'History'], ['settings', 'Settings']] as [k, l]}
         <button class:on={tab === k} onclick={() => (tab = k as Tab)}>{l}</button>
       {/each}
     </nav>
@@ -704,7 +740,14 @@
                 <div class="spotbanner"><span class="spotlogo">📺 Saturday Spotlight</span>
                   <span>{site === 'neutral' ? 'The show is live from the title game.' : `The show is live from ${G.team(g, next.home).school}.`} The whole country, and every recruit you've offered, is watching.</span></div>
               {/if}
-              <div class="eyebrow">{weekLabel} · <span class:cupcake={next.type === 'cupcake'}>{typeTag[next.type]}</span> · {SITE_LABEL[site]}</div>
+              {#if next.type === 'bowl'}
+                {@const b = G.BOWLS[next.bowl ?? 0]}
+                <div class="bowlbanner"><span class="bowlname">{b.icon} {b.name}</span><span>{b.tradition}</span></div>
+              {:else if next.seeds}
+                <div class="bowlbanner playoff"><span class="bowlname">🏆 {typeTag[next.type]}</span>
+                  <span>#{next.home === g.user ? next.seeds[0] : next.seeds[1]} seed vs #{next.home === g.user ? next.seeds[1] : next.seeds[0]} seed. Win or go home.</span></div>
+              {/if}
+              <div class="eyebrow">{weekLabel} · <span class:cupcake={next.type === 'cupcake'}>{gameTag(next)}</span> · {SITE_LABEL[site]}</div>
               <div class="score">
                 <div class="side">
                   {@render badge(me, 'lg')}
@@ -748,17 +791,21 @@
                     <div><small>Scouting their defense</small><b>{scout.defense}</b></div>
                   </div>
                   <div class="gp-row"><span class="muted small">Offense</span>
-                    <div class="seg">{#each G.LEANS as v}<button class:on={plan.off === v} onclick={() => setPlan('off', v)}>{OFF_LABEL[v]}</button>{/each}</div></div>
+                    <input class="lean" type="range" min={G.LEAN_MIN} max={G.LEAN_MAX} step={G.LEAN_STEP} value={plan.off}
+                      oninput={(e) => setPlan('off', +e.currentTarget.value)} aria-label="Offense: pass to run" />
+                    <div class="leanlabels"><span>Pass-heavy</span><b>{offText(plan.off)}</b><span>Run-heavy</span></div></div>
                   <div class="gp-row"><span class="muted small">Defense</span>
-                    <div class="seg">{#each G.LEANS as v}<button class:on={plan.def === v} onclick={() => setPlan('def', v)}>{DEF_LABEL[v]}</button>{/each}</div></div>
+                    <input class="lean def" type="range" min={G.LEAN_MIN} max={G.LEAN_MAX} step={G.LEAN_STEP} value={plan.def}
+                      oninput={(e) => setPlan('def', +e.currentTarget.value)} aria-label="Defense: stop the pass to stop the run" />
+                    <div class="leanlabels"><span>Stop the pass</span><b>{defText(plan.def)}</b><span>Stop the run</span></div></div>
                   <p class="muted small">Lean into what your team does well and where they're weak, and set your defense for what you think they'll call. Coaches mix it up, so it's never certain.</p>
                 </div>
               {/if}
               <button class="btn primary block" onclick={sim}>Play week {g.week}</button>
             {:else}
               <div class="eyebrow">{weekLabel}</div>
-              <h2>You're not in this round</h2>
-              <p class="muted">Sim the week to see who advances.</p>
+              <h2>No game for you this week</h2>
+              <p class="muted">{g.week > G.REGULAR_WEEKS ? 'Your season is done. Sim to watch the bowls and the playoff play out.' : 'Sim the week to see the results.'}</p>
               <button class="btn primary block" onclick={sim}>Sim week</button>
             {/if}
           </section>
@@ -1049,7 +1096,7 @@
           {#snippet srowBody()}
             <span class="wk">Wk {gm.week}</span>
             {@render badge(o, 'sm')}
-            <div class="grow"><b>{siteOf(gm) === 'away' ? 'at' : 'vs'} <span class="rk">{rk(o.id)}</span>{o.school}</b><div class="muted small"><span class="sitetag sm" class:home={siteOf(gm) === 'home'}>{SITE_LABEL[siteOf(gm)]}</span> {#if gm.played || gm.week === g!.week}<span title={G.WEATHER_TEXT[G.weatherOf(g!, gm)].name}>{G.WEATHER_TEXT[G.weatherOf(g!, gm)].icon}</span>{' '}{/if}{#if gm.spotlight || sameGame(spot, gm)}<span class="spotchip sm">📺 Spotlight</span>{' '}{/if}{typeTag[gm.type]}{gm.played && gm.rotation ? (gm.rotation >= 0.5 ? ' · backups played 2nd half' : ' · rotated') : ''}</div></div>
+            <div class="grow"><b>{siteOf(gm) === 'away' ? 'at' : 'vs'} <span class="rk">{rk(o.id)}</span>{o.school}</b><div class="muted small"><span class="sitetag sm" class:home={siteOf(gm) === 'home'}>{SITE_LABEL[siteOf(gm)]}</span> {#if gm.played || gm.week === g!.week}<span title={G.WEATHER_TEXT[G.weatherOf(g!, gm)].name}>{G.WEATHER_TEXT[G.weatherOf(g!, gm)].icon}</span>{' '}{/if}{#if gm.spotlight || sameGame(spot, gm)}<span class="spotchip sm">📺 Spotlight</span>{' '}{/if}{gameTag(gm)}{gm.played && gm.rotation ? (gm.rotation >= 0.5 ? ' · backups played 2nd half' : ' · rotated') : ''}</div></div>
             {#if res}<span class="result" class:w={res.w}>{res.w ? 'W' : 'L'} {res.text}</span>{:else}<span class="muted small">Upcoming</span>{/if}
           {/snippet}
           {#if gm.log}
@@ -1071,6 +1118,19 @@
           </div>
           <span class="muted small">{G.WEATHER_TEXT[G.weatherOf(g, spot)].icon} {G.WEATHER_TEXT[G.weatherOf(g, spot)].name} · The winner gets a bump in the poll.</span>
         </section>
+      {/if}
+      {#if helmetNow || helmetWatch.length}
+        <div class="postgrid">
+          <section class="card flush">
+            <div class="cardhead"><h3>🏈 {G.HELMET} Trophy</h3><span class="muted small">{helmetNow ? `${g.year} winner` : 'Watch list · awarded after title week'}</span></div>
+            {#if helmetNow}
+              <div class="helmetwin">{@render badge(G.team(g, helmetNow.team), 'md')}<div><b>{helmetNow.pos} {helmetNow.name}</b><div class="muted small">{G.team(g, helmetNow.team).school} · {helmetNow.line}</div></div></div>
+              {#each helmetNow.finalists as f}<div class="hrow muted small"><span>Finalist</span><b>{f.pos} {f.name}</b><span>{G.team(g, f.team).abbr} · {f.line}</span></div>{/each}
+            {:else}
+              {#each helmetWatch as x, i}<div class="hrow" class:me={x.team.id === g.user}><span class="rnum">{i + 1}</span><b>{x.p.pos} {x.p.first} {x.p.last}</b><span class="muted small">{x.team.abbr} · {G.statLine(x.p)}</span></div>{/each}
+            {/if}
+          </section>
+        </div>
       {/if}
       <div class="ranklayout">
         <section class="card flush">
@@ -1141,6 +1201,54 @@
         {/each}
       </div>
 
+    {:else if tab === 'postseason' && proj}
+      <section class="card rhq">
+        <div class="cardhead0"><h3>{proj.projected ? 'Postseason projection' : g.phase === 'offseason' ? `${g.year} postseason` : 'The postseason field is set'}</h3>
+          <span class="muted small">{proj.projected ? `If the season ended today · poll after ${G.lastPlayedWeek(g) ? `week ${G.lastPlayedWeek(g)}` : 'preseason'}` : 'Results fill in as games are played'}</span></div>
+        <p class="myproj">{myProjection}</p>
+        {#if proj.projected}<p class="muted small">Each conference's leader takes its automatic spot as projected champion (C). The poll fills the other playoff spots and the bowls, among teams on pace for {6}+ wins. The real field is picked after conference title week.</p>{/if}
+      </section>
+      <div class="postgrid">
+        <section class="card flush bracketcard">
+          <div class="cardhead"><h3>{proj.projected ? 'Projected playoff' : 'Playoff'}</h3><span class="muted small">8 teams · seeded by rank</span></div>
+          <div class="bracket">
+            {#each [['Quarterfinals', proj.quarters], ['Semifinals', proj.projected ? [] : semis], ['Title game', !proj.projected && finalGame ? [finalGame] : []]] as [label, games]}
+              <div class="round"><span class="eyebrow">{label}</span>
+                <div class="rgames">{#each games as Game[] as x}{@render bracketGame(x, proj.champs)}{:else}<div class="bgame tbd muted small">To be decided</div>{/each}</div></div>
+            {/each}
+          </div>
+        </section>
+        <section class="card flush">
+          <div class="cardhead"><h3>{proj.projected ? 'Projected bowls' : 'Bowl games'}</h3></div>
+          {#each proj.bowls as x}
+            {@const b = G.BOWLS[x.bowl ?? 0]}
+            {@const h = G.team(g, x.home)}
+            {@const a = G.team(g, x.away)}
+            <div class="bowlrow" class:me={x.home === g.user || x.away === g.user}>
+              <span class="bowlicon">{b.icon}</span>
+              <div class="grow"><b>{b.name}</b><div class="small">
+                <span class:win={x.played && x.hs! > x.as!}>{rk(h.id)}{h.school} ({proj.projected ? `on pace for ${G.projectedWins(g, h)}-${12 - G.projectedWins(g, h)}` : `${h.w}-${h.l}`}){x.played ? ` ${x.hs}` : ''}</span> vs
+                <span class:win={x.played && x.as! > x.hs!}>{rk(a.id)}{a.school} ({proj.projected ? `on pace for ${G.projectedWins(g, a)}-${12 - G.projectedWins(g, a)}` : `${a.w}-${a.l}`}){x.played ? ` ${x.as}` : ''}</span></div></div>
+            </div>
+          {:else}
+            <p class="muted pad">Not enough teams on pace for 6 wins yet.</p>
+          {/each}
+        </section>
+        <section class="card flush">
+          <div class="cardhead"><h3>On the bubble</h3></div>
+          <div class="bubblehead eyebrow">First teams out of the playoff</div>
+          {#each proj.firstOut as t, i}
+            <div class="hrow" class:me={t.id === g.user}><span class="rnum">{i + 1}</span><b>{rk(t.id)}{t.school}</b><span class="muted small">{t.w}-{t.l} · {g.confNames[t.conf]}</span></div>
+          {/each}
+          {#if proj.projected && proj.bowlBubble.length}
+            <div class="bubblehead eyebrow">Bowl bubble</div>
+            {#each proj.bowlBubble as t}
+              <div class="hrow" class:me={t.id === g.user}><span></span><b>{t.school}</b><span class="muted small">{t.w}-{t.l} · on pace for {G.projectedWins(g, t)} wins</span></div>
+            {/each}
+          {/if}
+        </section>
+      </div>
+
     {:else if tab === 'history'}
       <section class="card flush">
         <div class="cardhead"><h3>Program history</h3></div>
@@ -1149,6 +1257,14 @@
           <div class="srow"><span class="wk">{h.year}</span><b class="grow">{h.finish}</b><span>{h.record}</span><span class="muted small">Prestige {h.prestige}</span></div>
         {/each}
       </section>
+      {#if g.awards?.length}
+        <section class="card flush draftboard">
+          <div class="cardhead"><h3>🏈 {G.HELMET} winners</h3></div>
+          {#each g.awards as a}
+            <div class="srow" class:current={a.team === g.user}><span class="wk">{a.year}</span>{@render badge(G.team(g, a.team), 'sm')}<div class="grow"><b>{a.pos} {a.name}</b><div class="muted small">{G.team(g, a.team).school} · {a.line}</div></div></div>
+          {/each}
+        </section>
+      {/if}
       {#if g.drafts?.length}
         {@const d = g.drafts[Math.min(draftYear, g.drafts.length - 1)]}
         <section class="card flush draftboard">
@@ -1387,7 +1503,7 @@
     <div class="modal" role="dialog" aria-modal="true" aria-label="Game log" onclick={(e) => e.target === e.currentTarget && (viewGame = null)}
       onkeydown={(e) => e.key === 'Escape' && (viewGame = null)} tabindex="-1">
       <div class="card recap">
-        <div class="cardhead0"><div class="eyebrow">{G.weekName(vg.week)} · {typeTag[vg.type]}</div><button class="btn sm" onclick={() => (viewGame = null)}>Close</button></div>
+        <div class="cardhead0"><div class="eyebrow">{G.weekName(vg.week)} · {gameTag(vg)}</div><button class="btn sm" onclick={() => (viewGame = null)}>Close</button></div>
         <h2>{G.team(g, vg.away).school} at {G.team(g, vg.home).school}</h2>
         {@render gameLog(vg)}
       </div>

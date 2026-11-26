@@ -9,14 +9,21 @@ export interface Player {
   trait?: Trait
   /** The four skills for his position (see SKILLS). OVR is their weighted average. */
   skills?: number[]
+  /** This season's stats. Cleared each offseason. */
+  stats?: Stats
+  /** Trophies he has won, e.g. "Golden Helmet 2027". */
+  awards?: string[]
 }
+export interface Stats { g: number; passYds: number; passTd: number; int: number; rushYds: number; rushTd: number; recYds: number; recTd: number; sacks: number; tkw: number; fg: number }
 export interface Team {
   id: number; school: string; mascot: string; abbr: string; color: string
   conf: number; prestige: number; roster: Player[]
   w: number; l: number; cw: number; cl: number
   confChamp?: boolean; playoff?: boolean; champ?: boolean
+  /** This season: the bowl it plays in (index into BOWLS), and whether it has the Golden Helmet winner. */
+  bowl?: number; helmet?: boolean
 }
-export type GameType = 'cupcake' | 'nonconf' | 'conf' | 'ccg' | 'semi' | 'final'
+export type GameType = 'cupcake' | 'nonconf' | 'conf' | 'ccg' | 'quarter' | 'semi' | 'final' | 'bowl'
 export interface Game {
   week: number; home: number; away: number; type: GameType
   hs?: number; as?: number; played: boolean; rotation?: number
@@ -24,6 +31,10 @@ export interface Game {
   log?: Drive[]; plan?: Plan; oppPlan?: Plan; potg?: string
   /** The week's Saturday Spotlight game. */
   spotlight?: boolean
+  /** Bowl games: index into BOWLS. */
+  bowl?: number
+  /** Playoff games: the two teams' seeds, home first. */
+  seeds?: [number, number]
   /** Your home games: crowd size, and fan meter change after the game. */
   attendance?: number; fanDelta?: number
 }
@@ -71,6 +82,7 @@ export interface State {
   recap?: Recap | null
   staff?: Coach[]; staffMarket?: Coach[]
   ad?: AD
+  awards?: Award[]
   /** Set when the AD fires you: schools offering you a job. */
   fired?: { offers: number[] } | null
   facilities?: Partial<Record<Facility, number>>
@@ -163,7 +175,7 @@ function rollTrait(): Trait | undefined {
 }
 
 // ---------- Weekly recap ----------
-export type RecapKind = 'injury' | 'commit' | 'lost' | 'visit' | 'goal' | 'league' | 'trait' | 'info' | 'spotlight'
+export type RecapKind = 'injury' | 'commit' | 'lost' | 'visit' | 'goal' | 'league' | 'trait' | 'info' | 'spotlight' | 'bowl' | 'award'
 export interface Recap {
   week: number; label: string; rankBefore: number; rankAfter: number
   result?: { opp: number; my: number; their: number; win: boolean; home: boolean; type: GameType; spotlight?: boolean; fanDelta?: number; attendance?: number }
@@ -177,8 +189,38 @@ function log(g: State, kind: RecapKind, text: string) {
   building?.lines.push({ kind, text })
 }
 export function weekName(week: number) {
-  return week <= REGULAR_WEEKS ? `Week ${week}` : week === 13 ? 'Conference title week' : week === 14 ? 'Playoff semifinals' : 'National title game'
+  return week <= REGULAR_WEEKS ? `Week ${week}` : week === 13 ? 'Conference title week' : week === 14 ? 'Bowls and playoff quarterfinals'
+    : week === 15 ? 'Playoff semifinals' : 'National title game'
 }
+/** The national title game's week. The season ends after it. */
+export const FINAL_WEEK = 16
+const POSTSEASON: GameType[] = ['ccg', 'quarter', 'semi', 'final', 'bowl']
+/** Postseason games don't count toward the regular-season record. */
+export const isPostseason = (t: GameType) => POSTSEASON.includes(t)
+export const PLAYOFF_TEAMS = 8
+
+// ---------- Bowls ----------
+/** Made-up sponsor bowls, best matchup first. Each has a tradition that plays out after the game. */
+export const BOWLS: { name: string; icon: string; tradition: string; done: (coach: string) => string }[] = [
+  { name: 'Frosted Waffle Bowl', icon: '🧇', tradition: 'The giant waffle mascot gets lowered into a toaster after the game.',
+    done: c => `The waffle mascot was lowered into the giant toaster, and ${c} took the first bite.` },
+  { name: 'Pickle Jar Bowl', icon: '🥒', tradition: 'The winning coach gets a bucket of pickle juice dumped on him.',
+    done: c => `${c} got a full bucket of pickle juice over the head.` },
+  { name: 'Hot Sauce Bowl', icon: '🌶', tradition: 'The winning captains each take a spoonful of ghost-pepper sauce.',
+    done: () => 'The captains took their spoonfuls of ghost-pepper sauce. Two of them cried on live TV.' },
+  { name: 'Corn Dog Classic', icon: '🌭', tradition: 'The trophy is a six-foot golden corn dog.',
+    done: c => `${c} hoisted the six-foot golden corn dog.` },
+  { name: 'Gravy Boat Bowl', icon: '🛶', tradition: 'The winners take a lap of the field in a giant gravy boat.',
+    done: () => 'The winners paddled a giant gravy boat around the field.' },
+  { name: 'Cheese Puff Bowl', icon: '🧀', tradition: 'Cannons blast orange cheese dust over the winning sideline.',
+    done: () => 'The cheese cannons fired, and the winning sideline turned bright orange.' },
+  { name: 'Sweet Tea Bowl', icon: '🧋', tradition: 'The winning coach gets a sweet tea bath from a giant pitcher.',
+    done: c => `${c} got the sweet tea bath. Extra ice.` },
+  { name: 'Funnel Cake Bowl', icon: '🍰', tradition: 'The winning team gets buried in powdered sugar.',
+    done: () => 'The winners disappeared under a cloud of powdered sugar.' },
+]
+const BOWL_MIN_WINS = 6
+const cap = (x: string) => x.charAt(0).toUpperCase() + x.slice(1)
 
 // ---------- RNG (seeded so a save replays the same way) ----------
 let s = 1
@@ -448,9 +490,10 @@ function hashRoll(...xs: number[]) {
 }
 /** The forecast for a game, from the home team's region and the week. Snow only shows up from week 9. */
 export function weatherOf(g: State, x: Game): Weather {
-  if (x.type === 'ccg' || x.type === 'final') return 'indoors'
+  if (x.type === 'ccg' || x.type === 'semi' || x.type === 'final') return 'indoors'
   const home = team(g, x.home)
-  const c = CLIMATE[home.conf] ?? CLIMATE[0]
+  // Bowls are in warm places: Gulf Coast weather, no snow.
+  const c = x.type === 'bowl' ? { ...CLIMATE[1], snow: 0 } : CLIMATE[home.conf] ?? CLIMATE[0]
   const r = hashRoll(g.year, x.week, x.home, x.away)
   const snow = c.snow * clamp((x.week - 8) / 4, 0, 1)
   return r < snow ? 'snow' : r < snow + c.rain ? 'rain' : r < snow + c.rain + c.wind ? 'wind' : 'clear'
@@ -492,12 +535,21 @@ function fanSwing(win: boolean, home: boolean, oppRanked: boolean, spotlight: bo
 }
 
 // ---------- Game plan ----------
-export type Lean = 'run' | 'balanced' | 'pass'
-export const LEANS: Lean[] = ['run', 'balanced', 'pass']
+/** Run share: 0.2 means throw 80% of the time, 0.8 means run 80%. Used for the offense and for what a defense expects. */
+export type Lean = number
+export const LEAN_MIN = 0.2
+export const LEAN_MAX = 0.8
+export const LEAN_STEP = 0.05
 /** off: how your offense leans. def: what your defense sells out to stop. */
 export interface Plan { off: Lean; def: Lean }
-export const DEFAULT_PLAN: Plan = { off: 'balanced', def: 'balanced' }
-const RUN_SHARE: Record<Lean, number> = { run: 0.7, balanced: 0.5, pass: 0.3 }
+export const DEFAULT_PLAN: Plan = { off: 0.5, def: 0.5 }
+const snapLean = (x: number) => clamp(Math.round(x / LEAN_STEP) * LEAN_STEP, LEAN_MIN, LEAN_MAX)
+/** Plain words for a lean, for the recap. */
+export function leanWord(x: number, side: 'off' | 'def') {
+  const pct = Math.round(x * 100)
+  if (side === 'off') return x >= 0.6 ? `run-heavy (${pct}% runs)` : x <= 0.4 ? `pass-heavy (${100 - pct}% passes)` : `balanced (${pct}% runs)`
+  return x >= 0.6 ? 'geared to stop the run' : x <= 0.4 ? 'geared to stop the pass' : 'balanced'
+}
 /** How much the game plan matters. 1.5 puts smart plans about 5 win% above balanced. */
 const PLAN_WEIGHT = 1.5
 /** Like groupRating, for a mix of skills at one position instead of OVR. */
@@ -532,22 +584,23 @@ type Style = ReturnType<typeof styleRatings>
  * `def` is the defense's edge from guessing the lean: +3 for a right guess, -3 for the opposite one.
  */
 export function planEdge(o: Style, offLean: Lean, d: Style, defLean: Lean) {
-  const rs = RUN_SHARE[offLean]
+  const rs = offLean
   const off = (rs - 0.5) * ((o.runOff - d.runDef) - (o.passOff - d.passDef)) * PLAN_WEIGHT
-  const def = (2 - 10 * Math.abs(rs - RUN_SHARE[defLean])) * PLAN_WEIGHT
+  // A read within 0.1 of their real lean pays off; one 0.4 off or more costs you.
+  const def = (2 - 10 * Math.abs(rs - defLean)) * PLAN_WEIGHT
   return { off, def }
 }
 /** What a coach would call against this opponent. With `rng`, a quarter of offenses and a third of defenses mix it up. */
 export function aiPlan(t: Team, opp: Team, rng = true, weather: Weather = 'clear'): Plan {
   if (t.conf < 0) return { ...DEFAULT_PLAN }
   const me = styleRatings(t), them = styleRatings(opp)
-  const lean = (x: number): Lean => x > 3 ? 'run' : x < -3 ? 'pass' : 'balanced'
-  let off = lean((me.runOff - them.runDef) - (me.passOff - them.passDef))
-  let def = lean((them.runOff - me.runDef) - (them.passOff - me.passDef))
-  if (rng) { if (rnd() < 0.25) off = pick(LEANS); if (rnd() < 0.35) def = pick(LEANS) }
+  // Lean toward whatever works better against this opponent, then (with rng) mix it up so it can't be read perfectly.
+  let off = 0.5 + ((me.runOff - them.runDef) - (me.passOff - them.passDef)) * 0.025
+  let def = 0.5 + ((them.runOff - me.runDef) - (them.passOff - me.passDef)) * 0.025
+  if (rng) { off += (rnd() - 0.5) * 0.3; def += (rnd() - 0.5) * 0.4 }
   // Bad weather: coaches keep the ball on the ground and expect the other team to as well.
-  if (WEATHER_FX[weather].pass >= 4) { if (off === 'pass') off = 'balanced'; if (def === 'pass') def = 'balanced' }
-  return { off, def }
+  if (WEATHER_FX[weather].pass >= 4) { off = Math.max(off, 0.55); def = Math.max(def, 0.55) }
+  return { off: snapLean(clamp(off, 0.25, 0.75)), def: snapLean(def) }
 }
 /** Expected rating swing from your plan against their likely plan, for the matchup preview. */
 export function planPreview(me: Team, opp: Team, plan: Plan, blend = 0) {
@@ -586,18 +639,19 @@ const FAN_EDGE = 0.012
 const SPOTLIGHT_CROWD = 0.01
 /** The same edge in team-rating points, for the win odds on the matchup card. */
 export const homeEdgeRating = (g: State, homeId: number, spotlight = false) => homeEdge(g, homeId, spotlight) * 65 * (1 + AWAY_SHARE) / 2
-/** Conference title games and the national title game are at neutral sites. */
-export const isNeutral = (x: Game) => x.type === 'ccg' || x.type === 'final'
+/** Conference title games, bowls, playoff semifinals and the title game are at neutral sites. Quarterfinals are at the higher seed. */
+export const isNeutral = (x: Game) => x.type === 'ccg' || x.type === 'semi' || x.type === 'final' || x.type === 'bowl'
 /** A player for a play, from starters, or backups in the 2nd half when the coach rotates. */
-function onField(team: Team, pos: Pos, q: number, blend: number) {
-  const d = depth(team)[pos]
+function onField(dd: ReturnType<typeof depth>, pos: Pos, q: number, blend: number) {
+  const d = dd[pos]
   const pool = (blend >= 0.5 && q >= 3) || (blend > 0 && rnd() < blend) ? (d.backups.length ? d.backups : d.starters) : d.starters
   return pool.length ? pick(pool) : null
 }
 const nm = (p: Player | null) => p ? p.last : 'a walk-on'
+const st = (p: Player | null) => p ? (p.stats ??= { g: 0, passYds: 0, passTd: 0, int: 0, rushYds: 0, rushTd: 0, recYds: 0, recTd: 0, sacks: 0, tkw: 0, fg: 0 }) : null
 function playGame(A: Side, B: Side, homeAdv: number, wantLog: boolean, weather: Weather = 'clear') {
   const fx = WEATHER_FX[weather]
-  const wx = (s: Side) => -fx.pass * (1 - RUN_SHARE[s.plan.off])
+  const wx = (s: Side) => -fx.pass * (1 - s.plan.off)
   const ra = teamRatings(A.team, A.blend), rb = teamRatings(B.team, B.blend)
   const sa = styleRatings(A.team, A.blend), sb = styleRatings(B.team, B.blend)
   const ea = planEdge(sa, A.plan.off, sb, B.plan.def), eb = planEdge(sb, B.plan.off, sa, A.plan.def)
@@ -615,6 +669,8 @@ function playGame(A: Side, B: Side, homeAdv: number, wantLog: boolean, weather: 
     const c = credit.get(pl) ?? { td: 0, pass: 0, turn: 0, sack: 0, fg: 0 }
     c[k]++; credit.set(pl, c)
   }
+  const dd = [depth(A.team), depth(B.team)]
+  for (const d of dd) for (const pos of POSITIONS) for (const pl of d[pos].starters) st(pl)!.g++
   for (let i = 0; i < DRIVES; i++) {
     const side = (i % 2) as 0 | 1, x = sides[side], q = Math.min(4, Math.floor(i / 5.5) + 1)
     let pts = 0, kind: 'td' | 'fg' | 'miss' | 'stop' = 'stop'
@@ -622,42 +678,47 @@ function playGame(A: Side, B: Side, homeAdv: number, wantLog: boolean, weather: 
       if (rnd() < x.td) { pts = 7; kind = 'td' } else if (rnd() < 0.55 + x.k / 300 + fx.fg) { pts = 3; kind = 'fg' } else kind = 'miss'
     }
     score[side] += pts
-    if (!wantLog) continue
-    const t = x.s.team, dt = x.def.team, bl = x.s.blend, dbl = x.def.blend
-    const run = rnd() < RUN_SHARE[x.s.plan.off]
+    // Who touched the ball, and the yards. Every game keeps stats; only your games keep the text log.
+    const od = dd[side], ddf = dd[1 - side], bl = x.s.blend, dbl = x.def.blend
+    const rs = x.s.plan.off
+    const run = rnd() < rs
+    const qb = onField(od, 'QB', q, bl)
+    // Carries: mostly the lead back, with QB keepers and the odd sweep to a receiver.
+    const rr = rnd()
+    const rusher = rr < 0.15 ? qb : rr < 0.25 ? onField(od, 'WR', q, bl) : onField(od, 'RB', q, bl)
+    const rec = onField(od, rnd() < 0.7 ? 'WR' : 'TE', q, bl)
+    const yards = kind === 'td' ? ri(45, 85) : kind === 'fg' ? ri(30, 60) : kind === 'miss' ? ri(25, 55) : ri(0, 40)
+    // About 60% of yards come through the air with a balanced plan.
+    const passYds = clamp(Math.round(yards * (1 - rs) * 1.25 * (0.6 + rnd() * 0.8)), 0, yards)
+    if (passYds) { st(qb) && (st(qb)!.passYds += passYds); st(rec) && (st(rec)!.recYds += passYds) }
+    if (yards - passYds) st(rusher) && (st(rusher)!.rushYds += yards - passYds)
     let text = ''
     if (kind === 'td') {
-      if (run) {
-        const r = rnd() < 0.15 ? onField(t, 'QB', q, bl) : onField(t, 'RB', q, bl)
-        text = `${ri(1, 45)}-yd TD run by ${nm(r)}`; give(r, 'td')
-      } else {
-        const qb = onField(t, 'QB', q, bl), rc = onField(t, rnd() < 0.8 ? 'WR' : 'TE', q, bl)
-        text = `${nm(qb)} ${ri(4, 75)}-yd TD pass to ${nm(rc)}`; give(qb, 'pass'); give(rc, 'td')
-      }
+      if (run) { text = `${ri(1, 45)}-yd TD run by ${nm(rusher)}`; give(rusher, 'td'); st(rusher) && st(rusher)!.rushTd++ }
+      else { text = `${nm(qb)} ${ri(4, 75)}-yd TD pass to ${nm(rec)}`; give(qb, 'pass'); give(rec, 'td'); st(qb) && st(qb)!.passTd++; st(rec) && st(rec)!.recTd++ }
     } else if (kind === 'fg') {
-      const k = onField(t, 'K', q, bl); text = `${nm(k)} ${ri(22, 52)}-yd field goal`; give(k, 'fg')
+      const k = onField(od, 'K', q, bl); text = `${nm(k)} ${ri(22, 52)}-yd field goal`; give(k, 'fg'); st(k) && st(k)!.fg++
     } else if (kind === 'miss') {
-      text = `${nm(onField(t, 'K', q, bl))} missed a ${ri(38, 56)}-yd field goal`
+      text = `${nm(onField(od, 'K', q, bl))} missed a ${ri(38, 56)}-yd field goal`
     } else {
       const r = rnd()
       if (r < 0.2) {
-        if (!run) { const db = onField(dt, 'DB', q, dbl); text = `${nm(onField(t, 'QB', q, bl))} intercepted by ${nm(db)}`; give(db, 'turn') }
-        else { const lb = onField(dt, rnd() < 0.6 ? 'LB' : 'DL', q, dbl); text = `${nm(onField(t, 'RB', q, bl))} fumbled, recovered by ${nm(lb)}`; give(lb, 'turn') }
+        if (!run) { const db = onField(ddf, 'DB', q, dbl); text = `${nm(qb)} intercepted by ${nm(db)}`; give(db, 'turn'); st(db) && st(db)!.tkw++; st(qb) && st(qb)!.int++ }
+        else { const lb = onField(ddf, rnd() < 0.6 ? 'LB' : 'DL', q, dbl); text = `${nm(rusher)} fumbled, recovered by ${nm(lb)}`; give(lb, 'turn'); st(lb) && st(lb)!.tkw++ }
       } else if (r < 0.42) {
-        const dl = onField(dt, rnd() < 0.7 ? 'DL' : 'LB', q, dbl); text = `Sacked by ${nm(dl)} on third down. Punt`; give(dl, 'sack')
+        const dl = onField(ddf, rnd() < 0.7 ? 'DL' : 'LB', q, dbl); text = `Sacked by ${nm(dl)} on third down. Punt`; give(dl, 'sack'); st(dl) && st(dl)!.sacks++
       } else text = pick(['Three and out. Punt', 'Stalled near midfield. Punt', 'Drive stalls. Punt', 'Turned over on downs'])
     }
-    log.push({ q, side, text, pts, score: [score[0], score[1]] })
+    if (wantLog) log.push({ q, side, text, pts, score: [score[0], score[1]] })
   }
   const edge = (ra.ovr + (A.boost.off + A.boost.def) / 2) - (rb.ovr + (B.boost.off + B.boost.def) / 2)
   while (score[0] === score[1]) {
     const side = rnd() < 0.5 + edge / 60 ? 0 : 1, pts = pick([3, 7])
     score[side] += pts
-    if (wantLog) {
-      const t = sides[side].s.team
-      const text = pts === 7 ? `Overtime TD by ${nm(onField(t, rnd() < 0.5 ? 'RB' : 'WR', 4, 0))}` : `Overtime field goal by ${nm(onField(t, 'K', 4, 0))}`
-      log.push({ q: 5, side: side as 0 | 1, text, pts, score: [score[0], score[1]] })
-    }
+    const od = dd[side]
+    const who = pts === 7 ? onField(od, rnd() < 0.5 ? 'RB' : 'WR', 4, 0) : onField(od, 'K', 4, 0)
+    if (pts === 7) { st(who) && (who!.pos === 'RB' ? st(who)!.rushTd++ : st(who)!.recTd++) } else st(who) && st(who)!.fg++
+    if (wantLog) log.push({ q: 5, side: side as 0 | 1, text: pts === 7 ? `Overtime TD by ${nm(who)}` : `Overtime field goal by ${nm(who)}`, pts, score: [score[0], score[1]] })
   }
   return { hs: score[0], as: score[1], log, credit }
 }
@@ -740,8 +801,8 @@ export function simWeek(g: State) {
     const hb = userHome ? g.rotation : cupcakeAI
     const ab = userAway ? g.rotation : gm.type === 'cupcake' ? 0 : 0
     if (isUser) gm.rotation = g.rotation
-    const neutral = gm.type === 'final' || gm.type === 'ccg'
-    const big = gm.type === 'ccg' || gm.type === 'semi' || gm.type === 'final'
+    const neutral = isNeutral(gm)
+    const big = isPostseason(gm.type)
     const homeAdv = neutral ? 0 : homeEdge(g, h.id, !!gm.spotlight)
     const weather = weatherOf(g, gm)
     const myPlan = g.plan ?? DEFAULT_PLAN
@@ -754,8 +815,8 @@ export function simWeek(g: State) {
       gm.potg = playerOfGame(userHome ? h : a, res.credit)
     }
     const hw = hs > as
-    if (h.conf >= 0 && gm.type !== 'ccg' && gm.type !== 'semi' && gm.type !== 'final') { hw ? h.w++ : h.l++ }
-    if (a.conf >= 0 && gm.type !== 'ccg' && gm.type !== 'semi' && gm.type !== 'final') { hw ? a.l++ : a.w++ }
+    if (h.conf >= 0 && !big) { hw ? h.w++ : h.l++ }
+    if (a.conf >= 0 && !big) { hw ? a.l++ : a.w++ }
     if (gm.type === 'conf') { if (hw) { h.cw++; a.cl++ } else { a.cw++; h.cl++ } }
     if (gm.type === 'ccg') (hw ? h : a).confChamp = true
     if (gm.type === 'final') { const c = hw ? h : a; c.champ = true; g.champion = c.id }
@@ -767,13 +828,19 @@ export function simWeek(g: State) {
     if (isUser) {
       const opp = userHome ? a : h
       const my = userHome ? hs : as, their = userHome ? as : hs, win = my > their
-      const tag = gm.type === 'ccg' ? 'Conference title game: ' : gm.type === 'semi' ? 'Playoff semifinal: ' : gm.type === 'final' ? 'National title game: ' : ''
+      const tag = gm.type === 'ccg' ? 'Conference title game: ' : gm.type === 'quarter' ? 'Playoff quarterfinal: ' : gm.type === 'semi' ? 'Playoff semifinal: '
+        : gm.type === 'final' ? 'National title game: ' : gm.type === 'bowl' ? `${BOWLS[gm.bowl ?? 0].name}: ` : ''
       g.news.unshift(`Week ${g.week}. ${tag}${win ? 'Beat' : 'Lost to'} ${opp.school} ${my}-${their}.${gm.type === 'final' && win ? ' NATIONAL CHAMPIONS!' : ''}`)
       const oppRanked = (oppRank.get(opp.id) ?? 99) <= TOP_N
       const fanDelta = fanSwing(win, userHome, oppRanked, !!gm.spotlight, gm.type === 'cupcake', Math.abs(my - their))
       if (userHome && !neutral) gm.attendance = attendanceFor(g, !!gm.spotlight)
-      g.fans = clamp(fansOf(g) + fanDelta, 0, 100)
-      gm.fanDelta = fanDelta
+      const bonusFans = win && gm.type === 'bowl' ? 3 : win && (gm.type === 'quarter' || gm.type === 'semi') ? 4 : 0
+      g.fans = clamp(fansOf(g) + fanDelta + bonusFans, 0, 100)
+      gm.fanDelta = fanDelta + bonusFans
+      if (gm.type === 'bowl') {
+        const b = BOWLS[gm.bowl ?? 0]
+        log(g, 'bowl', win ? `${b.icon} ${b.name} champions! ${cap(b.done('you'))}` : `${b.icon} Lost the ${b.name}. ${cap(b.done(`${opp.school}'s coach`))}`)
+      }
       building.result = { opp: opp.id, my, their, win, home: userHome, type: gm.type, spotlight: !!gm.spotlight, fanDelta, attendance: gm.attendance }
       if (gm.spotlight) {
         let n = 0
@@ -808,12 +875,18 @@ export function simWeek(g: State) {
       log(g, 'spotlight', `Saturday Spotlight at ${h.school}: ${w.school} beat ${l.school} ${Math.max(hs, as)}-${Math.min(hs, as)}.`)
     } else if (big) {
       const w = team(g, hs > as ? gm.home : gm.away), l = team(g, hs > as ? gm.away : gm.home)
-      const what = gm.type === 'ccg' ? `won the ${g.confNames[w.conf]} title` : gm.type === 'semi' ? 'advanced to the national title game' : 'won the national title'
-      log(g, 'league', `${w.school} ${what}, beating ${l.school} ${Math.max(hs, as)}-${Math.min(hs, as)}.`)
+      const sc = `${Math.max(hs, as)}-${Math.min(hs, as)}`
+      if (gm.type === 'bowl') { const b = BOWLS[gm.bowl ?? 0]; log(g, 'bowl', `${b.icon} ${w.school} won the ${b.name} over ${l.school}, ${sc}. ${cap(b.done(`the ${w.mascot} coach`))}`) }
+      else {
+        const what = gm.type === 'ccg' ? `won the ${g.confNames[w.conf]} title` : gm.type === 'quarter' ? 'won a playoff quarterfinal'
+          : gm.type === 'semi' ? 'advanced to the national title game' : 'won the national title'
+        log(g, 'league', `${w.school} ${what}, beating ${l.school} ${sc}.`)
+      }
     }
   }
   if (g.week <= REGULAR_WEEKS) recruitingTick(g)
   if (g.week === REGULAR_WEEKS) log(g, 'info', 'Regular season is over. Recruiting is closed until next season.')
+  if (g.week === 13) awardHelmet(g)
   const goals = g.ad?.goals ?? []
   // Only goals that can't be lost again once met. Rank and conference place move every week.
   const locks = (x: Goal) => x.kind === 'wins' || x.kind === 'confWins' || x.kind === 'recruits' || (x.kind === 'conf' && x.target === 1)
@@ -822,7 +895,7 @@ export function simWeek(g: State) {
   g.points = weeklyPoints(g)
   g.rotation = 0
   // season over?
-  if (g.week > 15) g.phase = 'offseason'
+  if (g.week > FINAL_WEEK) g.phase = 'offseason'
   else scheduleNextRound(g)
   g.seed = getSeed()
   if (g.phase === 'offseason') openPortal(g)
@@ -840,8 +913,9 @@ export function confStandings(g: State, conf: number) {
 function scheduleNextRound(g: State) {
   const has = (type: GameType) => g.schedule.some(x => x.type === type)
   if (g.week === 13 && !has('ccg')) addConfChampionships(g)
-  if (g.week === 14 && !has('semi')) addSemis(g)
-  if (g.week === 15 && !has('final')) addFinal(g)
+  if (g.week === 14 && !has('quarter')) addPlayoffAndBowls(g)
+  if (g.week === 15 && !has('semi')) addSemis(g)
+  if (g.week === 16 && !has('final')) addFinal(g)
 }
 function addConfChampionships(g: State) {
   for (let c = 0; c < 4; c++) {
@@ -849,23 +923,119 @@ function addConfChampionships(g: State) {
     g.schedule.push({ week: 13, home: a.id, away: b.id, type: 'ccg', played: false })
   }
 }
+const winnerOf = (x: Game) => (x.hs! > x.as! ? x.home : x.away)
+/** The playoff field: conference champions plus the best-ranked others, seeded by rank. Shared by the real selection and the projection. */
+function selectField(ranked: Team[], champIds: Set<number>) {
+  const field = new Set([...champIds])
+  for (const t of ranked) { if (field.size >= PLAYOFF_TEAMS) break; field.add(t.id) }
+  return ranked.filter(t => field.has(t.id))
+}
+/** Bowl matchups: the best remaining teams paired in order, avoiding same-conference games when possible. Best pair gets the top bowl. */
+function pairBowls(pool: Team[]) {
+  const left = [...pool], out: { bowl: number; a: Team; b: Team }[] = []
+  for (let b = 0; b < BOWLS.length && left.length >= 2; b++) {
+    const a = left.shift()!
+    let j = left.findIndex(t => t.conf !== a.conf)
+    if (j < 0) j = 0
+    out.push({ bowl: b, a, b: left.splice(j, 1)[0] })
+  }
+  return out
+}
+/** Eight-team playoff and the bowls for everyone else good enough. */
+function addPlayoffAndBowls(g: State) {
+  const ranked = rankAt(g, lastPlayedWeek(g)).map(r => r.team)
+  const seeds = selectField(ranked, new Set(ranked.filter(t => t.confChamp).map(t => t.id)))
+  const field = new Set(seeds.map(t => t.id))
+  seeds.forEach(t => (t.playoff = true))
+  for (let i = 0; i < PLAYOFF_TEAMS / 2; i++) {
+    const hi = seeds[i], lo = seeds[PLAYOFF_TEAMS - 1 - i]
+    g.schedule.push({ week: 14, home: hi.id, away: lo.id, type: 'quarter', played: false, seeds: [i + 1, PLAYOFF_TEAMS - i] })
+  }
+  log(g, 'league', `Playoff field: ${seeds.map((t, i) => `${i + 1}. ${t.school}`).join(', ')}.`)
+  const mySeed = seeds.findIndex(t => t.id === g.user)
+  if (mySeed >= 0) log(g, 'info', `You made the playoff as the #${mySeed + 1} seed!`)
+  for (const { bowl: b, a, b: o } of pairBowls(ranked.filter(t => !field.has(t.id) && t.w >= BOWL_MIN_WINS))) {
+    a.bowl = b; o.bowl = b
+    g.schedule.push({ week: 14, home: a.id, away: o.id, type: 'bowl', played: false, bowl: b })
+    if (a.id === g.user || o.id === g.user) log(g, 'bowl', `${BOWLS[b].icon} You're going to the ${BOWLS[b].name} to play ${(a.id === g.user ? o : a).school}! ${BOWLS[b].tradition}`)
+  }
+}
+/** Regular-season games a team still has to play. */
+const gamesLeft = (g: State, id: number) => g.schedule.filter(x => !x.played && x.week <= REGULAR_WEEKS && (x.home === id || x.away === id)).length
+/** Wins a team is on pace for by the end of the regular season. */
+export function projectedWins(g: State, t: Team) {
+  const left = gamesLeft(g, t.id)
+  return Math.round(t.w + left * ((t.w + 1) / (t.w + t.l + 2)))
+}
+export interface PostseasonView {
+  /** false once the real field is set after title week. */
+  projected: boolean
+  quarters: Game[]
+  bowls: Game[]
+  /** Projected (or actual) conference champions. */
+  champs: Set<number>
+  /** Best teams left out of the playoff. */
+  firstOut: Team[]
+  /** Teams on pace for bowl eligibility who didn't get a bowl, and teams one win short. */
+  bowlBubble: Team[]
+}
+/**
+ * Where everyone would land if the season ended today: conference leaders take the automatic spots,
+ * the poll fills the rest of the playoff, and the bowls are paired the same way the real selection does it.
+ * Once the real field is set, returns that instead.
+ */
+export function projectPostseason(g: State): PostseasonView {
+  const ranked = rankAt(g, lastPlayedWeek(g)).map(r => r.team)
+  const realQ = g.schedule.filter(x => x.type === 'quarter')
+  if (realQ.length) {
+    const field = new Set(realQ.flatMap(x => [x.home, x.away]))
+    return {
+      projected: false, quarters: realQ.sort((a, b) => a.seeds![0] - b.seeds![0]),
+      bowls: g.schedule.filter(x => x.type === 'bowl').sort((a, b) => (a.bowl ?? 0) - (b.bowl ?? 0)),
+      champs: new Set(g.teams.filter(t => t.confChamp).map(t => t.id)),
+      firstOut: ranked.filter(t => !field.has(t.id)).slice(0, 4), bowlBubble: [],
+    }
+  }
+  // Conference title games already played count; otherwise the current conference leader.
+  const champs = new Set(g.confNames.map((_, c) => {
+    const real = g.teams.find(t => t.conf === c && t.confChamp)
+    return (real ?? confStandings(g, c)[0]).id
+  }))
+  const seeds = selectField(ranked, champs)
+  const field = new Set(seeds.map(t => t.id))
+  const quarters: Game[] = []
+  for (let i = 0; i < PLAYOFF_TEAMS / 2; i++) {
+    quarters.push({ week: 14, home: seeds[i].id, away: seeds[PLAYOFF_TEAMS - 1 - i].id, type: 'quarter', played: false, seeds: [i + 1, PLAYOFF_TEAMS - i] })
+  }
+  const eligible = ranked.filter(t => !field.has(t.id) && projectedWins(g, t) >= BOWL_MIN_WINS)
+  const paired = pairBowls(eligible)
+  const inBowl = new Set(paired.flatMap(x => [x.a.id, x.b.id]))
+  return {
+    projected: true, quarters, champs,
+    bowls: paired.map(x => ({ week: 14, home: x.a.id, away: x.b.id, type: 'bowl' as GameType, played: false, bowl: x.bowl })),
+    firstOut: ranked.filter(t => !field.has(t.id)).slice(0, 4),
+    bowlBubble: ranked.filter(t => !field.has(t.id) && !inBowl.has(t.id) && projectedWins(g, t) >= BOWL_MIN_WINS - 1).slice(0, 6),
+  }
+}
 function addSemis(g: State) {
-  // Conference champions get in, seeded by national rank.
-  const champs = rankAt(g, lastPlayedWeek(g)).map(r => r.team).filter(t => t.confChamp)
-  champs.forEach(t => (t.playoff = true))
-  g.schedule.push({ week: 14, home: champs[0].id, away: champs[3].id, type: 'semi', played: false })
-  g.schedule.push({ week: 14, home: champs[1].id, away: champs[2].id, type: 'semi', played: false })
-  if (champs.some(t => t.id === g.user)) log(g, 'info', 'You made the playoff!')
+  const qf = g.schedule.filter(x => x.type === 'quarter').sort((a, b) => a.seeds![0] - b.seeds![0])
+  // 1/8 winner plays 4/5 winner, 2/7 winner plays 3/6 winner. The better seed is listed first.
+  for (const [i, j] of [[0, 3], [1, 2]]) {
+    const wa = winnerOf(qf[i]), wb = winnerOf(qf[j])
+    const sa = qf[i].home === wa ? qf[i].seeds![0] : qf[i].seeds![1], sb = qf[j].home === wb ? qf[j].seeds![0] : qf[j].seeds![1]
+    const [h, a, sh, sx] = sa < sb ? [wa, wb, sa, sb] : [wb, wa, sb, sa]
+    g.schedule.push({ week: 15, home: h, away: a, type: 'semi', played: false, seeds: [sh, sx] })
+  }
 }
 function addFinal(g: State) {
   const semis = g.schedule.filter(x => x.type === 'semi')
-  const winners = semis.map(x => (x.hs! > x.as! ? x.home : x.away))
-  g.schedule.push({ week: 15, home: winners[0], away: winners[1], type: 'final', played: false })
+  const seedOf = (x: Game, id: number) => x.home === id ? x.seeds![0] : x.seeds![1]
+  const [a, b] = semis.map(x => ({ id: winnerOf(x), seed: seedOf(x, winnerOf(x)) })).sort((p, q) => p.seed - q.seed)
+  g.schedule.push({ week: 16, home: a.id, away: b.id, type: 'final', played: false, seeds: [a.seed, b.seed] })
 }
 export function userInPostseason(g: State) {
-  if (g.week < 13) return true
-  if (g.week === 13) return confStandings(g, team(g, g.user).conf).slice(0, 2).some(t => t.id === g.user)
-  return !!userNextGame(g) || g.schedule.some(x => x.week === g.week && (x.home === g.user || x.away === g.user))
+  if (g.week <= REGULAR_WEEKS) return true
+  return g.schedule.some(x => x.week === g.week && (x.home === g.user || x.away === g.user))
 }
 
 // ---------- National rankings ----------
@@ -937,7 +1107,7 @@ function rankAt(g: State, week: number): Omit<RankRow, 'prev'>[] {
   ;[...rows].sort((a, b) => b.sos - a.sos).forEach((r, i) => (r.sosRank = i + 1))
   rows.sort((a, b) => b.score - a.score || b.team.prestige - a.team.prestige)
   // The national champion finishes #1 in the final poll.
-  const champ = week >= 15 ? rows.findIndex(r => r.team.champ) : -1
+  const champ = week >= FINAL_WEEK ? rows.findIndex(r => r.team.champ) : -1
   if (champ > 0) rows.unshift(rows.splice(champ, 1)[0])
   rows.forEach((r, i) => (r.rank = i + 1))
   return rows
@@ -1226,7 +1396,15 @@ export function releasePlayer(g: State, id: number) {
 }
 export function finishLabel(g: State, t: Team) {
   if (t.champ) return 'National champions'
-  if (t.playoff) return 'Playoff'
+  const last = g.schedule.filter(x => x.played && isPostseason(x.type) && x.type !== 'ccg' && (x.home === t.id || x.away === t.id)).sort((a, b) => b.week - a.week)[0]
+  const pre = t.confChamp ? 'Conference champions, ' : ''
+  if (last) {
+    const won = winnerOf(last) === t.id
+    if (last.type === 'final') return `${pre}lost the national title game`.replace(/^l/, 'L')
+    if (last.type === 'semi') return `${pre}playoff semifinal`.replace(/^p/, 'P')
+    if (last.type === 'quarter') return `${pre}playoff quarterfinal`.replace(/^p/, 'P')
+    if (last.type === 'bowl') return `${pre}${won ? 'won' : 'lost'} the ${BOWLS[last.bowl ?? 0].name}`.replace(/^(w|l)/, m => m.toUpperCase())
+  }
   if (t.confChamp) return 'Conference champions'
   const rank = confStandings(g, t.conf).indexOf(t) + 1
   return `${rank}${['st', 'nd', 'rd'][rank - 1] ?? 'th'} in ${g.confNames[t.conf]}`
@@ -1250,7 +1428,10 @@ export function advanceOffseason(g: State) {
   const confAvg = g.confNames.map((_, c) => { const m = g.teams.filter(t => t.conf === c); return m.reduce((n, t) => n + t.prestige, 0) / m.length })
   for (const t of g.teams) {
     const fromRank = 9.5 - ((finalRank.get(t.id) ?? 16) - 1) * (8 / (g.teams.length - 1))
+    const bowlGame = g.schedule.find(x => x.type === 'bowl' && x.played && (x.home === t.id || x.away === t.id))
+    const bowlBonus = bowlGame ? (winnerOf(bowlGame) === t.id ? 0.3 : 0.1) : 0
     const target = fromRank * (1 - CONF_PULL) + confAvg[t.conf] * CONF_PULL + (t.confChamp ? 0.5 : 0) + (t.playoff ? 0.5 : 0) + (t.champ ? 1 : 0)
+      + bowlBonus + (t.helmet ? 0.3 : 0)
     t.prestige = clamp(Math.round((t.prestige + (target - t.prestige) * PRESTIGE_DRIFT) * 10) / 10, 1, 10)
   }
   me.prestige = clamp(Math.round((me.prestige + met * AD_PRESTIGE) * 10) / 10, 1, 10)
@@ -1282,7 +1463,7 @@ export function advanceOffseason(g: State) {
       const mult = t.id === g.user ? devBoost(g, p) : 1
       const next = Math.min(p.pot, Math.round(p.ovr + (p.pot - p.ovr) * 0.28 * DEV_MULT[p.dev] * mult + snapBonus + ri(0, 2) + (p.trait === 'Gym rat' ? 1 : 0)))
       addGrowth(p, next - p.ovr)
-      p.year++; p.snaps = 0
+      p.year++; p.snaps = 0; p.stats = undefined
       if (t.id === g.user && p.ovr - before >= 8) report.bigJumps.push(`${p.pos} ${p.first} ${p.last} +${Math.round(p.ovr - before)} (now ${p.ovr})`)
     }
   }
@@ -1300,7 +1481,7 @@ export function advanceOffseason(g: State) {
     if (t.id === g.user) report.walkOns = w
   }
   // reset season
-  for (const t of g.teams) { t.w = t.l = t.cw = t.cl = 0; t.confChamp = t.playoff = t.champ = false }
+  for (const t of g.teams) { t.w = t.l = t.cw = t.cl = 0; t.confChamp = t.playoff = t.champ = t.helmet = false; t.bowl = undefined }
   g.year++; g.week = 1; g.phase = 'season'; g.champion = null; g.focus = []; g.focusSkill = {}; g.rotation = 0
   g.schedule = makeSchedule(g)
   g.recruits = makeRecruits(g)
@@ -1368,6 +1549,51 @@ export function hireCoach(g: State, id: number) {
   return `Hired ${c.first} ${c.last}.`
 }
 
+// ---------- Golden Helmet Trophy ----------
+export const HELMET = 'Golden Helmet'
+export interface Award { year: number; id: number; name: string; pos: Pos; team: number; line: string; finalists: { name: string; pos: Pos; team: number; line: string }[] }
+/** A one-line stat summary that fits the position. */
+export function statLine(p: Player) {
+  const s = p.stats
+  if (!s) return 'No stats yet'
+  const n = (x: number) => x.toLocaleString()
+  if (p.pos === 'QB') return `${n(s.passYds)} pass yds, ${s.passTd} TD, ${s.int} INT${s.rushYds >= 200 ? `, ${n(s.rushYds)} rush yds` : ''}${s.rushTd ? `, ${s.rushTd} rush TD` : ''}`
+  if (p.pos === 'RB') return `${n(s.rushYds)} rush yds, ${s.rushTd} TD${s.recYds ? `, ${n(s.recYds)} rec yds` : ''}`
+  if (p.pos === 'WR' || p.pos === 'TE') return `${n(s.recYds)} rec yds, ${s.recTd} TD`
+  if (p.pos === 'K') return `${s.fg} field goals`
+  if (p.pos === 'DB') return `${s.tkw} takeaways`
+  return `${s.sacks} sacks, ${s.tkw} takeaways`
+}
+/** The award race: production, weighted by how good the team is. */
+export function helmetRace(g: State) {
+  const ranks = new Map(rankAt(g, lastPlayedWeek(g)).map(r => [r.team.id, r.rank]))
+  const out: { p: Player; team: Team; score: number }[] = []
+  for (const t of g.teams) {
+    const pct = (t.w + 1) / (t.w + t.l + 2)
+    const rank = ranks.get(t.id) ?? 32
+    for (const p of t.roster) {
+      const s = p.stats
+      if (!s || !s.g) continue
+      const prod = s.passYds / 19 + s.passTd * 4.5 - s.int * 3 + s.rushYds / 9.5 + s.rushTd * 6 + s.recYds / 8.5 + s.recTd * 6 + s.sacks * 5 + s.tkw * 6
+      if (prod <= 0) continue
+      out.push({ p, team: t, score: prod * (0.6 + pct * 0.8) + (rank <= 10 ? 15 : 0) })
+    }
+  }
+  return out.sort((a, b) => b.score - a.score)
+}
+/** Handed out after conference title week, before bowls and the playoff. */
+function awardHelmet(g: State) {
+  const top = helmetRace(g).slice(0, 4)
+  if (!top.length) return
+  const [w] = top
+  const entry = (x: typeof w) => ({ name: `${x.p.first} ${x.p.last}`, pos: x.p.pos, team: x.team.id, line: statLine(x.p) })
+  g.awards = [{ year: g.year, id: w.p.id, ...entry(w), finalists: top.slice(1).map(entry) }, ...(g.awards ?? [])]
+  w.p.awards = [...(w.p.awards ?? []), `${HELMET} ${g.year}`]
+  w.team.helmet = true
+  log(g, 'award', `${HELMET} Trophy: ${w.p.pos} ${w.p.first} ${w.p.last} of ${w.team.school} (${statLine(w.p)}).`)
+  if (w.team.id === g.user) { g.fans = clamp(fansOf(g) + 8, 0, 100); log(g, 'award', 'Your player won it! The fans are going nuts.') }
+}
+
 // ---------- Facilities ----------
 export type Facility = 'weights' | 'lounge' | 'stadium' | 'medical'
 export const FACILITIES: Record<Facility, { name: string; does: string }> = {
@@ -1401,6 +1627,7 @@ export function visitSwing(g: State, win: boolean, ranked: boolean) {
 function boosterIncome(g: State, goalsMet: number, picks: number) {
   const me = g.teams[g.user]
   const x = 0.5 + me.w * 0.12 + goalsMet * 0.4 + (me.confChamp ? 0.5 : 0) + (me.playoff ? 0.5 : 0) + (me.champ ? 1 : 0) + picks * 0.3 + fansOf(g) / 100 * 0.8
+    + (me.bowl !== undefined ? 0.4 : 0) + (me.helmet ? 0.5 : 0)
   return Math.round(x * 10) / 10
 }
 
@@ -1413,7 +1640,7 @@ const DRAFT_PICKS = DRAFT_ROUNDS * DRAFT_PER_ROUND
 /** Juniors this good may leave early. */
 export const EARLY_OVR = 76
 export const EARLY_CHANCE = 0.6
-const draftScore = (p: Player) => p.ovr + (p.pot - p.ovr) * 0.15
+const draftScore = (p: Player) => p.ovr + (p.pot - p.ovr) * 0.15 + (p.awards?.some(a => a.startsWith(HELMET)) ? 3 : 0)
 function draftPool(g: State, declares: (p: Player) => boolean) {
   const inPortal = new Set(portalEntries(g).map(e => e.p.id))
   return g.teams.flatMap(t => t.roster
