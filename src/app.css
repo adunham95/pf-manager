@@ -763,3 +763,10 @@ input[type=color] { width: 36px; height: 32px; border: 1px solid var(--line); bo
 @keyframes trophyglow { to { box-shadow: 0 0 0 2px #e9b949, 0 6px 26px rgba(233, 185, 73, .6); } }
 .rivalvs { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 @media (prefers-reduced-motion: reduce) { .trophy.mine { animation: none; } }
+
+/* coordinators hired away */
+.poach { display: grid; gap: 6px; margin: 0 16px 10px; padding: 10px 12px; border-radius: 10px;
+  background: color-mix(in srgb, #f5a524 14%, var(--card)); border: 1px solid color-mix(in srgb, #f5a524 45%, transparent); }
+.poach .two { margin-top: 4px; }
+.coach.vacant b { color: var(--hot); }
+.poachcall { margin-top: 10px; }

@@ -59,11 +59,15 @@ export interface SeasonReport {
   transfersIn?: string[]; transfersOut?: string[]
   ad?: { met: number; total: number; strikes: number; fired: boolean; lines: string[] }
   drafted?: string[]; boosters?: number
+  /** Coordinators who left for head coaching jobs, and interim coaches promoted to fill a vacancy. */
+  staffLeft?: string[]
 }
 export interface PortalEntry {
   /** A copy of the player when he entered. The real one stays on his old roster until signing day. */
   p: Player; from: number; reason: string
   interest: number; rival: number; rivalTeam: number; offered: boolean; visited: boolean
+  /** On your portal board because you're following him. */
+  followed?: boolean
   /** null until he picks a school. During the window only the user can land him; rivals take the rest on signing day. */
   to: number | null
 }
@@ -99,6 +103,8 @@ export interface State {
   drafts?: DraftClass[]
   /** One in-conference rival per team, played every year in Rivalry Week for a trophy. */
   rivalries?: Rivalry[]
+  /** Head coaching offers for your coordinators, open until signing day. */
+  poach?: PoachOffer[]
 }
 
 // ---------- Skills ----------
@@ -185,7 +191,7 @@ function rollTrait(): Trait | undefined {
 }
 
 // ---------- Weekly recap ----------
-export type RecapKind = 'injury' | 'commit' | 'lost' | 'visit' | 'goal' | 'league' | 'trait' | 'info' | 'spotlight' | 'bowl' | 'award' | 'rivalry'
+export type RecapKind = 'injury' | 'commit' | 'lost' | 'visit' | 'goal' | 'league' | 'trait' | 'info' | 'spotlight' | 'bowl' | 'award' | 'rivalry' | 'staff'
 export interface Recap {
   week: number; label: string; rankBefore: number; rankAfter: number
   result?: { opp: number; my: number; their: number; win: boolean; home: boolean; type: GameType; spotlight?: boolean; fanDelta?: number; attendance?: number }
@@ -1061,7 +1067,7 @@ export function simWeek(g: State) {
   if (g.week > FINAL_WEEK) g.phase = 'offseason'
   else scheduleNextRound(g)
   g.seed = getSeed()
-  if (g.phase === 'offseason') openPortal(g)
+  if (g.phase === 'offseason') { openPortal(g); coachingCarousel(g) }
   building.rankAfter = rankAt(g, lastPlayedWeek(g)).find(r => r.team.id === g.user)!.rank
   if (g.phase === 'offseason') building.lines.push({ kind: 'info', text: 'The season is over. The transfer portal is open until signing day.' })
   g.recap = building
@@ -1769,6 +1775,8 @@ export function advanceOffseason(g: State) {
   g.year++; g.week = 1; g.phase = 'season'; g.champion = null; g.focus = []; g.focusSkill = {}; g.rotation = 0
   g.schedule = makeSchedule(g)
   g.recruits = makeRecruits(g)
+  const staffNews = settleStaff(g)
+  if (staffNews.length) report.staffLeft = staffNews
   g.staffMarket = makeMarket(g)
   ad.goals = makeGoals(g)
   if (fired) {
@@ -1828,9 +1836,78 @@ export function hireCoach(g: State, id: number) {
   if (after > staffBudget(g) + 1e-9) return `That puts you over your $${staffBudget(g).toFixed(1)}M staff budget.`
   g.staff = [...g.staff!.filter(x => x.role !== c.role), c].sort((a, b) => ROLE_LIST.indexOf(a.role) - ROLE_LIST.indexOf(b.role))
   g.staffMarket = g.staffMarket!.filter(x => x.id !== id)
-  if (cur) g.staffMarket.push(cur)
+  const leaving = cur && g.poach?.find(x => x.coachId === cur.id)
+  if (leaving) { g.poach = g.poach!.filter(x => x !== leaving); g.news.unshift(`${cur!.first} ${cur!.last} left to become head coach at ${team(g, leaving.school).school}.`) }
+  else if (cur) g.staffMarket.push(cur)
   g.news.unshift(`Hired ${c.first} ${c.last} as ${ROLES[c.role].title.toLowerCase()}.`)
   return `Hired ${c.first} ${c.last}.`
+}
+
+// ---------- Coordinators hired away ----------
+export interface PoachOffer { coachId: number; school: number; /** What it takes to keep him, in $M. */ salary: number }
+/** Base chance a coordinator gets a head coaching offer, plus this per star. Winning adds more. */
+const POACH_BASE = 0.03
+const POACH_PER_STAR = 0.04
+const POACH_MAX = 0.7
+/** Matching an offer: his salary times this, plus a little. */
+const POACH_RAISE = 1.4
+/** Chance a coordinator gets offered a head job after this season. */
+export function poachChance(g: State, c: Coach) {
+  const me = g.teams[g.user]
+  const rank = rankAt(g, lastPlayedWeek(g)).find(r => r.team.id === g.user)!.rank
+  const success = (me.champ ? 0.2 : 0) + (me.playoff ? 0.12 : 0) + (me.confChamp ? 0.08 : 0) + (rank <= 10 ? 0.06 : 0) + (me.w >= 9 ? 0.04 : 0)
+  return clamp(POACH_BASE + c.level * POACH_PER_STAR + success, 0, POACH_MAX)
+}
+/** After the season: other schools may offer your OC and DC their head coaching jobs. */
+function coachingCarousel(g: State) {
+  setSeed(g.seed)
+  const offers: PoachOffer[] = []
+  for (const c of g.staff ?? []) {
+    if (c.role === 'assistant' || rnd() >= poachChance(g, c)) continue
+    const school = pick(g.teams.filter(t => t.id !== g.user)).id
+    offers.push({ coachId: c.id, school, salary: Math.round((c.salary * POACH_RAISE + 0.2) * 10) / 10 })
+    log(g, 'staff', `${team(g, school).school} wants your ${ROLES[c.role].short}, ${c.first} ${c.last}, as their head coach. Match the offer or let him go on the Program tab.`)
+  }
+  g.poach = offers
+  g.seed = getSeed()
+}
+/** Keep a coordinator by matching his offer. */
+export function keepCoach(g: State, coachId: number) {
+  const o = g.poach?.find(x => x.coachId === coachId)
+  const c = g.staff?.find(x => x.id === coachId)
+  if (!o || !c) return ''
+  if (payroll(g) - c.salary + o.salary > staffBudget(g) + 1e-9) return `Keeping him at $${o.salary.toFixed(1)}M puts you over your $${staffBudget(g).toFixed(1)}M staff budget.`
+  c.salary = o.salary
+  g.poach = g.poach!.filter(x => x !== o)
+  g.news.unshift(`${c.first} ${c.last} turned down ${team(g, o.school).school} and is staying as your ${ROLES[c.role].short}.`)
+  return `${c.first} ${c.last} is staying.`
+}
+/** Let a coordinator take the head job. His spot is open until you hire someone. */
+export function releaseCoach(g: State, coachId: number) {
+  const o = g.poach?.find(x => x.coachId === coachId)
+  const c = g.staff?.find(x => x.id === coachId)
+  if (!o || !c) return ''
+  g.staff = g.staff!.filter(x => x !== c)
+  g.poach = g.poach!.filter(x => x !== o)
+  g.news.unshift(`${c.first} ${c.last} left to become head coach at ${team(g, o.school).school}.`)
+  return `${c.first} ${c.last} is off to ${team(g, o.school).school}. Hire a new ${ROLES[c.role].short}.`
+}
+/** Signing day: undecided offers are accepted, and empty spots get an interim coach. */
+function settleStaff(g: State): string[] {
+  const out: string[] = []
+  for (const o of [...(g.poach ?? [])]) {
+    const c = g.staff?.find(x => x.id === o.coachId)
+    if (c) out.push(`${ROLES[c.role].short} ${c.first} ${c.last} left to become head coach at ${team(g, o.school).school}.`)
+    releaseCoach(g, o.coachId)
+  }
+  g.poach = []
+  for (const role of ROLE_LIST) {
+    if (g.staff?.some(c => c.role === role)) continue
+    const c = makeCoach(g, role, 1)
+    g.staff = [...(g.staff ?? []), c].sort((a, b) => ROLE_LIST.indexOf(a.role) - ROLE_LIST.indexOf(b.role))
+    out.push(`Promoted ${c.first} ${c.last} to interim ${ROLES[role].short}. Hire someone better on the Program tab.`)
+  }
+  return out
 }
 
 // ---------- Golden Helmet Trophy ----------
@@ -1962,7 +2039,7 @@ export const pipelineBoost = (g: State) => Math.min(0.3, pipelinePicks(g) * 0.03
 
 // ---------- Athletic director ----------
 export type GoalKind = 'wins' | 'conf' | 'confWins' | 'rank' | 'recruits'
-export interface Goal { kind: GoalKind; target: number; text: string }
+export interface Goal { kind: GoalKind; target: number; text: string; /** Recruiting goals: lowest star rating that counts (default 3). */ stars?: number }
 export interface AD { goals: Goal[]; strikes: number; bonus: number }
 /** How far prestige moves toward its target each offseason. */
 const PRESTIGE_DRIFT = 0.22
@@ -1974,7 +2051,7 @@ export const AD_PRESTIGE = 0.15
 export const AD_POINTS = 10
 function makeGoals(g: State): Goal[] {
   const me = g.teams[g.user], pr = me.prestige, conf = g.confNames[me.conf]
-  const wins = clamp(Math.round(1 + pr * 0.8), 3, 8)
+  const wins = clamp(Math.round(1 + pr * 0.8), pr < 2.5 ? 2 : 3, 8)
   const recruits = clamp(Math.round(pr / 2.5), 1, 4)
   const goals: Goal[] = [{ kind: 'wins', target: wins, text: `Win ${wins} regular-season games` }]
   const rankTarget = pr >= 9 ? 8 : pr >= 7.5 ? 12 : pr >= 6 ? 15 : pr >= 5 ? 20 : 0
@@ -1988,7 +2065,12 @@ function makeGoals(g: State): Goal[] {
   if (pr >= 9.8 && expected === 1) goals.push({ kind: 'conf', target: 1, text: `Win the ${conf}` })
   else if (pr >= 7 && place === 2) goals.push({ kind: 'conf', target: 2, text: `Reach the ${conf} title game` })
   else if (pr >= 7) goals.push({ kind: 'conf', target: place, text: `Finish in the top ${place} of the ${conf}` })
-  else goals.push({ kind: 'recruits', target: recruits, text: `Sign ${recruits} recruit${recruits > 1 ? 's' : ''} rated 3★ or better` })
+  else {
+    // The weakest programs rarely land 3-stars, so 2-stars count for them.
+    const stars = pr < 2.5 ? 2 : 3
+    const n = pr < 2.5 ? 2 : recruits
+    goals.push({ kind: 'recruits', target: n, stars, text: `Sign ${n} recruit${n > 1 ? 's' : ''} rated ${stars}★ or better` })
+  }
   return goals
 }
 /** Where a goal stands right now. `done` is final once the season is over. */
@@ -1997,7 +2079,7 @@ export function goalProgress(g: State, x: Goal): { done: boolean; now: string } 
   if (x.kind === 'wins') return { done: me.w >= x.target, now: `${me.w} of ${x.target} wins` }
   if (x.kind === 'confWins') return { done: me.cw >= x.target, now: `${me.cw} of ${x.target} conference wins` }
   if (x.kind === 'recruits') {
-    const n = g.recruits.filter(r => r.committed === g.user && r.stars >= 3).length
+    const n = g.recruits.filter(r => r.committed === g.user && r.stars >= (x.stars ?? 3)).length
     return { done: n >= x.target, now: `${n} of ${x.target} signed` }
   }
   if (x.kind === 'rank') {

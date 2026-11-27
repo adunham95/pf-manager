@@ -288,9 +288,11 @@
   const pct = (n: number) => `${Math.round(n * 100)}%`
 
   // transfer portal
-  type PView = 'all' | 'mine' | 'targets'
-  let pView = $state<PView>('all')
+  // Portal screen mirrors the recruiting screen: board / available / everyone, star filter, sort, position grid.
+  let pView = $state<RView>('open')
   let pPos = $state<'ALL' | Pos>('ALL')
+  let pStar = $state(0)
+  let pSort = $state<RSort>('stars')
   let pSelId = $state<number | null>(null)
   $effect(() => { if (g && g.phase === 'offseason' && !g.portal && !g.report) G.openPortal(g) })
   $effect(() => { if (g && (!g.staff || !g.staffMarket || !g.ad || g.boosters === undefined)) G.ensureProgram(g) })
@@ -300,7 +302,9 @@
   const budget = $derived(g ? G.staffBudget(g) : 0)
   const pay = $derived(g ? G.payroll(g) : 0)
   function hire(id: number) { if (g) flash(G.hireCoach(g, id)) }
-  const RECAP_ICON: Record<G.RecapKind, string> = { injury: '✚', commit: '★', lost: '✕', visit: '⌂', goal: '✓', league: '🏆', trait: '⚡', info: '•', spotlight: '📺', bowl: '', award: '🏈', rivalry: '' }
+  function keepCoach(id: number) { if (g) flash(G.keepCoach(g, id)) }
+  function letGo(id: number) { if (g) flash(G.releaseCoach(g, id)) }
+  const RECAP_ICON: Record<G.RecapKind, string> = { injury: '✚', commit: '★', lost: '✕', visit: '⌂', goal: '✓', league: '🏆', trait: '⚡', info: '•', spotlight: '📺', bowl: '', award: '🏈', rivalry: '', staff: '📋' }
   const traitTag = (t?: G.Trait) => t ? G.TRAITS[t] : null
   // live signing day: pending (hats on the table), spinning (the pause), result (the pick)
   let sdPhase = $state<'pending' | 'spinning' | 'result'>('pending')
@@ -340,10 +344,26 @@
   const keySkill = (pos: Pos, i: number) => G.SKILL_WEIGHTS[pos][i] >= Math.max(...G.SKILL_WEIGHTS[pos]) - 0.001
   const portal = $derived(g?.portal ?? null)
   const myEntries = $derived(portal ? portal.entries.filter(e => e.from === g!.user) : [])
-  const pList = $derived(!portal ? [] : portal.entries.filter(e =>
-    (pPos === 'ALL' || e.p.pos === pPos) &&
-    (pView === 'all' || (pView === 'mine' ? e.from === g!.user : (e.offered || e.to === g!.user) && e.from !== g!.user))))
-  const pSel = $derived(portal ? (portal.entries.find(e => e.p.id === pSelId) ?? pList[0] ?? null) : null)
+  /** Your portal board: players you follow, offered or signed, and your own players who entered. */
+  const onPBoard = (e: PortalEntry) => !!e.followed || e.offered || e.to === g!.user || e.from === g!.user
+  function togglePFollow(e: PortalEntry) { e.followed = !e.followed; flash(e.followed ? `Following ${e.p.first} ${e.p.last}. He's on your board.` : `Unfollowed ${e.p.first} ${e.p.last}.`) }
+  const pList = $derived.by(() => {
+    if (!portal || !needs) return []
+    const list = portal.entries.filter(e =>
+      (pPos === 'ALL' || e.p.pos === pPos) && (!pStar || e.p.stars === pStar) &&
+      (pView === 'all' || (pView === 'board' ? onPBoard(e) : e.to === null)))
+    const by: Record<RSort, (a: PortalEntry, b: PortalEntry) => number> = {
+      stars: (a, b) => b.p.stars - a.p.stars || b.p.ovr - a.p.ovr,
+      ovr: (a, b) => b.p.ovr - a.p.ovr || b.p.stars - a.p.stars,
+      race: (a, b) => b.interest - a.interest,
+      need: (a, b) => Number(needs!.need[b.p.pos] > 0) - Number(needs!.need[a.p.pos] > 0) || b.p.ovr - a.p.ovr,
+    }
+    return list.sort(by[pSort])
+  })
+  const pBoardCount = $derived(portal ? portal.entries.filter(onPBoard).length : 0)
+  const transferList = $derived(portal ? portal.entries.filter(e => e.to === g!.user && e.from !== g!.user) : [])
+  // Like recruits: nothing open until you tap a player, and tapping again collapses him.
+  const pSel = $derived(portal && pSelId !== null ? (portal.entries.find(e => e.p.id === pSelId) ?? null) : null)
   function pStatus(e: PortalEntry): RStatus {
     const own = e.from === g!.user
     if (e.to === g!.user) return { k: 'mine', text: own ? 'Staying' : 'Signed' }
@@ -533,6 +553,32 @@
   </div>
 {/snippet}
 
+{#snippet positionGrid(cur: 'ALL' | Pos, set: (v: 'ALL' | Pos) => void, what: string)}
+  <div class="positions" role="group" aria-label="Positions: filter {what}">
+    <div class="poshead">
+      <div><b>Positions</b> <span class="muted small">next season · tap one to filter {what} · seniors graduate, juniors rated {G.EARLY_OVR}+ may leave · Short positions gain interest 20% faster</span></div>
+      <button class="chip" class:on={cur === 'ALL'} onclick={() => set('ALL')} aria-pressed={cur === 'ALL'}>All positions</button>
+    </div>
+    <div class="outlook-grid">
+      {#each G.rosterOutlook(g!) as o}
+        <button class="olrow" class:on={cur === o.pos} class:dim={cur !== 'ALL' && cur !== o.pos}
+          onclick={() => set(cur === o.pos ? 'ALL' : o.pos)} aria-pressed={cur === o.pos}>
+          <span class="pill {o.pos}">{o.pos}</span>
+          <span class="olcount"><b>{o.returning + o.commits + o.transfers}</b>/{o.need}</span>
+          <span class="olwho small">
+            {#each o.seniors as p}<span class="leaving">SR {p.last} ({Math.round(p.ovr)})</span>{/each}
+            {#each o.earlyRisk as p}<span class="risk">JR {p.last} ({Math.round(p.ovr)}) may leave</span>{/each}
+            {#if o.commits}<span class="incoming">+{o.commits} commit{o.commits > 1 ? 's' : ''}</span>{/if}
+            {#if o.transfers}<span class="incoming">+{o.transfers} transfer{o.transfers > 1 ? 's' : ''}</span>{/if}
+            {#if !o.seniors.length && !o.earlyRisk.length && !o.commits && !o.transfers}<span class="muted">No changes</span>{/if}
+          </span>
+          <span class="olstatus s-{o.status.replace(' ', '-')}">{o.status}</span>
+        </button>
+      {/each}
+    </div>
+  </div>
+{/snippet}
+
 {#snippet traitBox(t: G.Trait)}
   <div class="traitbox" class:bad={!G.TRAITS[t].good}><b>{t}</b><span>{G.TRAITS[t].text}</span></div>
 {/snippet}
@@ -627,8 +673,15 @@
         <h2>{e.p.first} {e.p.last}</h2>
         <div class="posline"><span class="pill {e.p.pos}">{e.p.pos}</span><span class="stars lg">{starStr(e.p.stars)}</span></div>
       </div>
-      <span class="rstat {st.k} big">{st.text}</span>
+      <div class="rd-side">
+        <span class="rstat {st.k} big">{st.text}</span>
+        <div class="rd-btns">
+          {#if !own}<button class="followbtn" class:on={e.followed} onclick={() => togglePFollow(e)} aria-pressed={!!e.followed}>{e.followed ? '★ Following' : '☆ Follow'}</button>{/if}
+          <button class="btn sm" onclick={() => (pSelId = null)} aria-label="Close player card">Close</button>
+        </div>
+      </div>
     </div>
+    {#if needs && needs.need[e.p.pos] > 0 && e.to === null && !own}<div class="tag need">Fills a need at {e.p.pos}</div>{/if}
     <div class="fromrow">{@render badge(from, 'sm')}<span>{own ? 'Your player' : `From ${from.school}`} · {G.YEARS[e.p.year]} · {e.reason}</span></div>
     {#if starts && e.to === null}<div class="tag ok startstag">Would start for you</div>{/if}
     <div class="rd-ratings">
@@ -826,6 +879,13 @@
                   <button class="btn" onclick={() => (tab = 'portal')}>Open portal</button>
                 </div>
               {/if}
+              {#if g.poach?.length}
+                <div class="portalcall poachcall">
+                  <div class="grow"><b>📋 {g.poach.length === 1 ? 'One of your coordinators has' : 'Both coordinators have'} a head coaching offer</b>
+                    <div class="muted small">Match the offer or let him go before signing day.</div></div>
+                  <button class="btn" onclick={() => (tab = 'program')}>Program tab</button>
+                </div>
+              {/if}
               <p class="muted">On signing day the portal closes, seniors graduate, players develop and your commits and transfers join the roster.</p>
               <button class="btn primary block" onclick={() => { if (!G.startSigningDay(g!)) G.advanceOffseason(g!); sdPhase = 'pending' }}>Go to signing day</button>
             {:else if next && opp && myR && oppR}
@@ -961,29 +1021,7 @@
           <div class="stat"><b>{weeksLeft}</b><small>{weeksLeft === 1 ? 'Week left' : 'Weeks left'}</small></div>
         </div>
         {#if !recruitingOpen}<p class="hint">Recruiting is closed until next season.</p>{/if}
-        <div class="positions" role="group" aria-label="Positions: filter recruits">
-          <div class="poshead">
-            <div><b>Positions</b> <span class="muted small">next season · tap one to filter recruits · seniors graduate, juniors rated {G.EARLY_OVR}+ may leave · Short positions gain interest 20% faster</span></div>
-            <button class="chip" class:on={posFilter === 'ALL'} onclick={() => (posFilter = 'ALL')} aria-pressed={posFilter === 'ALL'}>All positions</button>
-          </div>
-          <div class="outlook-grid">
-            {#each G.rosterOutlook(g) as o}
-              <button class="olrow" class:on={posFilter === o.pos} class:dim={posFilter !== 'ALL' && posFilter !== o.pos}
-                onclick={() => (posFilter = posFilter === o.pos ? 'ALL' : o.pos)} aria-pressed={posFilter === o.pos}>
-                <span class="pill {o.pos}">{o.pos}</span>
-                <span class="olcount"><b>{o.returning + o.commits + o.transfers}</b>/{o.need}</span>
-                <span class="olwho small">
-                  {#each o.seniors as p}<span class="leaving">SR {p.last} ({Math.round(p.ovr)})</span>{/each}
-                  {#each o.earlyRisk as p}<span class="risk">JR {p.last} ({Math.round(p.ovr)}) may leave</span>{/each}
-                  {#if o.commits}<span class="incoming">+{o.commits} commit{o.commits > 1 ? 's' : ''}</span>{/if}
-                  {#if o.transfers}<span class="incoming">+{o.transfers} transfer{o.transfers > 1 ? 's' : ''}</span>{/if}
-                  {#if !o.seniors.length && !o.earlyRisk.length && !o.commits && !o.transfers}<span class="muted">No changes</span>{/if}
-                </span>
-                <span class="olstatus s-{o.status.replace(' ', '-')}">{o.status}</span>
-              </button>
-            {/each}
-          </div>
-        </div>
+        {@render positionGrid(posFilter, v => (posFilter = v), 'recruits')}
         {#if commitList.length}
           <div class="classrow">
             <span class="eyebrow">Your class</span>
@@ -1066,55 +1104,69 @@
         <section class="card rhq">
           <div class="rhq-stats">
             <div class="stat"><b>{portal.points}<small>/{G.PORTAL_POINTS}</small></b><small>Portal points</small><span class="meter"><i style="width:{portal.points / G.PORTAL_POINTS * 100}%"></i></span></div>
-            <div class="stat"><b>{G.portalSigned(g)}<small>/{G.MAX_TRANSFERS}</small></b><small>Transfers signed</small></div>
-            <div class="stat"><b>{G.portalOffers(g)}<small>/{G.MAX_PORTAL_OFFERS}</small></b><small>Open offers</small></div>
+            <div class="stat"><b>{G.portalOffers(g)}<small>/{G.MAX_PORTAL_OFFERS}</small></b><small>Open offers</small><span class="meter"><i style="width:{G.portalOffers(g) / G.MAX_PORTAL_OFFERS * 100}%"></i></span></div>
+            <div class="stat"><b>{G.portalSigned(g)}<small>/{G.MAX_TRANSFERS}</small></b><small>Transfers</small></div>
             <div class="stat"><b class:hot={needs.open <= 0}>{needs.open}</b><small>Open spots</small></div>
+            <div class="stat"><b>{myEntries.filter(e => e.to !== g!.user).length}</b><small>Yours leaving</small></div>
           </div>
-          <p class="muted small">Points don't refill. Anyone you haven't signed goes to his top rival on signing day, and that includes your own players unless you win them back.</p>
+          <p class="hint">Points don't refill. The portal closes on signing day: anyone you haven't signed goes to his top rival, and that includes your own players unless you win them back.</p>
+          {@render positionGrid(pPos, v => (pPos = v), 'transfers')}
+          {#if transferList.length}
+            <div class="classrow">
+              <span class="eyebrow">Your transfers</span>
+              {#each transferList as e}<button class="commit" onclick={() => (pSelId = e.p.id)}><span class="pill {e.p.pos}">{e.p.pos}</span>{e.p.first[0]}. {e.p.last}<span class="stars">{'★'.repeat(e.p.stars)}</span></button>{/each}
+            </div>
+          {/if}
           {#if myEntries.length}
             <div class="classrow">
               <span class="eyebrow">Your players in the portal</span>
-              {#each myEntries as e}{@const st = pStatus(e)}<button class="commit {st.k}" onclick={() => { pSelId = e.p.id; pView = 'mine' }}><span class="pill {e.p.pos}">{e.p.pos}</span>{e.p.first[0]}. {e.p.last}<span class="rstat {st.k}">{st.text}</span></button>{/each}
+              {#each myEntries as e}{@const st = pStatus(e)}<button class="commit {st.k}" onclick={() => { pSelId = e.p.id; pView = 'board' }}><span class="pill {e.p.pos}">{e.p.pos}</span>{e.p.first[0]}. {e.p.last}<span class="rstat {st.k}">{st.text}</span></button>{/each}
             </div>
           {/if}
         </section>
-        <div class="rlayout">
+
+        <div class="rlayout" class:single={!pSel}>
           <section class="card flush">
             <div class="rtools">
               <div class="seg">
-                {#each [['all', `Everyone ${portal.entries.length}`], ['mine', `Yours ${myEntries.length}`], ['targets', 'My targets']] as [v, l]}
-                  <button class:on={pView === v} onclick={() => (pView = v as PView)}>{l}</button>
+                {#each [['board', `My board ${pBoardCount}`], ['open', 'Available'], ['all', 'Everyone']] as [v, l]}
+                  <button class:on={pView === v} onclick={() => (pView = v as RView)}>{l}</button>
                 {/each}
               </div>
               <div class="rselects">
-                <select bind:value={pPos} aria-label="Position"><option value="ALL">All positions</option>{#each G.POSITIONS as p}<option>{p}</option>{/each}</select>
+                <select bind:value={pStar} aria-label="Stars"><option value={0}>All stars</option>{#each [5, 4, 3, 2, 1] as s}<option value={s}>{s} star</option>{/each}</select>
+                <select bind:value={pSort} aria-label="Sort">
+                  <option value="stars">Sort: Stars</option><option value="ovr">Sort: OVR</option>
+                  <option value="race">Sort: Your interest</option><option value="need">Sort: Fills a need</option>
+                </select>
               </div>
             </div>
-            {#if pList.length === 0}<p class="muted pad">Nobody here.</p>{/if}
+            {#if pList.length === 0}
+              <p class="muted pad">{pView === 'board' ? 'Nobody on your board yet. Follow or offer players from Available.' : 'No players match these filters.'}</p>
+            {/if}
             <div class="rlist">
               {#each pList as e (e.p.id)}
                 {@const st = pStatus(e)}
                 {@const from = G.team(g, e.from)}
-                <button class="rrow {st.k}" class:sel={pSel?.p.id === e.p.id} onclick={() => (pSelId = e.p.id)} aria-pressed={pSel?.p.id === e.p.id}>
+                <button class="rrow {st.k}" class:sel={pSel?.p.id === e.p.id} onclick={() => (pSelId = pSelId === e.p.id ? null : e.p.id)} aria-expanded={pSel?.p.id === e.p.id}>
                   <span class="pill {e.p.pos}" class:need={needs.need[e.p.pos] > 0}>{e.p.pos}</span>
                   <Face id={e.p.id} color={from.color} year={e.p.year} size="sm" />
                   <span class="who">
-                    <span class="pname">{e.p.first} {e.p.last}</span>
-                    <span class="psub">{e.from === g.user ? 'Yours' : from.abbr} · {G.YEARS[e.p.year]} · <span class="stars">{'★'.repeat(e.p.stars)}</span></span>
+                    <span class="pname">{#if e.followed}<span class="followstar" title="Following">★</span> {/if}{e.p.first} {e.p.last}</span>
+                    <span class="psub"><span class="stars">{starStr(e.p.stars)}</span> · {e.from === g.user ? 'Yours' : from.abbr} · {G.YEARS[e.p.year]}</span>
                   </span>
                   <span class="rmini">
                     <span class="bar" class:ahead={e.interest >= e.rival}><i style="width:{Math.min(100, e.interest / 1.4)}%"></i></span>
                     <span class="rstat {st.k}">{st.text}</span>
                   </span>
                   <span class="nums"><b>{Math.round(e.p.ovr)}</b><small>OVR</small></span>
+                  <span class="chev" aria-hidden="true">▸</span>
                 </button>
                 {#if pSel?.p.id === e.p.id}<div class="rinline" transition:reveal>{@render portalDetail(e)}</div>{/if}
               {/each}
             </div>
           </section>
-          <aside class="card rside">
-            {#if pSel}{@render portalDetail(pSel)}{:else}<p class="muted">Pick a player to see his details.</p>{/if}
-          </aside>
+          {#if pSel}{#key pSel.p.id}<aside class="card rside cardin">{@render portalDetail(pSel)}</aside>{/key}{/if}
         </div>
       {/if}
 
@@ -1190,9 +1242,26 @@
             <div class="cardhead"><h3>Coaching staff</h3>
               <span class="small" class:hot={pay > budget}>${pay.toFixed(1)}M of ${budget.toFixed(1)}M</span></div>
             <div class="pad0"><span class="meter wide"><i style="width:{Math.min(100, pay / budget * 100)}%"></i></span></div>
-            {#each g.staff as c}
-              {@render coachRow(c, false)}
-              <p class="muted small roledoes">{G.ROLES[c.role].does}.</p>
+            {#each Object.keys(G.ROLES) as role}
+              {@const c = g.staff.find(x => x.role === role)}
+              {#if c}
+                {@const offer = g.poach?.find(o => o.coachId === c.id)}
+                {@render coachRow(c, false)}
+                {#if offer}
+                  {@const after = Math.round((pay - c.salary + offer.salary) * 10) / 10}
+                  <div class="poach">
+                    <b>📋 {G.team(g, offer.school).school} wants him as their head coach.</b>
+                    <span class="small">Match the offer to keep him at ${offer.salary.toFixed(1)}M a year (staff would be ${after.toFixed(1)}M of ${budget.toFixed(1)}M). If you don't decide, he leaves on signing day.</span>
+                    <div class="two">
+                      <button class="btn" onclick={() => letGo(c.id)}>Let him go</button>
+                      <button class="btn primary" disabled={after > budget + 1e-9} onclick={() => keepCoach(c.id)}>{after > budget + 1e-9 ? 'Over budget' : `Match: $${offer.salary.toFixed(1)}M`}</button>
+                    </div>
+                  </div>
+                {/if}
+                <p class="muted small roledoes">{G.ROLES[c.role].does}.</p>
+              {:else}
+                <div class="coach vacant"><span class="role">{G.ROLES[role as G.Role].short}</span><div class="grow"><b>Vacant</b><div class="muted small">Hire one below{G.canHire(g) ? '' : ' after the season'}. If it's still open on signing day, a position coach gets promoted.</div></div></div>
+              {/if}
             {/each}
             <div class="cardhead sub"><h3>Coaches available</h3>
               <span class="muted small">{G.canHire(g) ? 'Hiring is open' : 'Hiring opens after the season'}</span></div>
@@ -1578,6 +1647,7 @@
             <div><h4>Drafted</h4>{#each r.drafted as x}<div>{x}</div>{:else}<div class="muted">Nobody drafted</div>{/each}
               {#if r.boosters !== undefined}<h4>Boosters</h4><div>+${r.boosters.toFixed(1)}M for facilities</div>{/if}</div>
           {/if}
+          {#if r.staffLeft?.length}<div><h4>Coaching staff</h4>{#each r.staffLeft as x}<div>{x}</div>{/each}</div>{/if}
           <div><h4>Big jumps</h4>{#each r.bigJumps as x}<div>{x}</div>{:else}<div class="muted">No big jumps</div>{/each}</div>
         </div>
         {#if r.ad}
