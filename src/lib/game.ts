@@ -23,10 +23,18 @@ export interface Team {
   /** This season: the bowl it plays in (index into BOWLS), and whether it has the Golden Helmet winner. */
   bowl?: number; helmet?: boolean
 }
+export type Rotation = 'starters' | 'rotate' | 'half'
+/** Rotate puts the bench in once you lead by this many points. */
+export const DEFAULT_ROTATE_AT = 21
+export const rotateAtOf = (g: State) => g.rotateAt ?? DEFAULT_ROTATE_AT
+/** Rating blend for the matchup preview. Rotate only kicks in during a blowout, so it previews as starters. */
+export const previewBlend = (r: Rotation) => r === 'half' ? 0.5 : 0
 export type GameType = 'cupcake' | 'nonconf' | 'conf' | 'ccg' | 'quarter' | 'semi' | 'final' | 'bowl'
 export interface Game {
   week: number; home: number; away: number; type: GameType
-  hs?: number; as?: number; played: boolean; rotation?: number
+  hs?: number; as?: number; played: boolean
+  /** Only for your games: how you subbed, the lead you set for Rotate, and the share of drives your backups played. */
+  sub?: Rotation; subAt?: number; rotation?: number
   /** Only for your games: the drive log, both game plans and the player of the game. */
   log?: Drive[]; plan?: Plan; oppPlan?: Plan; potg?: string
   /** The week's Saturday Spotlight game. */
@@ -83,7 +91,8 @@ export interface State {
   year: number; week: number; phase: 'season' | 'offseason'
   user: number; teams: Team[]; cupcakes: Team[]; confNames: string[]
   schedule: Game[]; recruits: Recruit[]; points: number; focus: number[]
-  rotation: number; plan?: Plan; fans?: number; news: string[];
+  /** Game-day subs: starters all game, backups once up by rotateAt, or backups the whole 2nd half. */
+  rotation: Rotation; rotateAt?: number; plan?: Plan; fans?: number; news: string[];
   /** Which skill each player in training works on (index into SKILLS[pos]). */
   focusSkill?: Record<number, number>
   history: { year: number; record: string; finish: string; prestige: number }[]
@@ -327,7 +336,7 @@ export function newGame(userIndex: number, seed = Date.now()): State {
   const g: State = {
     version: 1, seed, nextId: 1, year: 2027, week: 1, phase: 'season', user: userIndex,
     teams: [], cupcakes: [], confNames: CONFS, schedule: [], recruits: [], points: POINTS_PER_WEEK,
-    focus: [], rotation: 0, news: [], history: [], champion: null, report: null, settings: { ...DEFAULT_SETTINGS },
+    focus: [], rotation: 'starters', rotateAt: DEFAULT_ROTATE_AT, news: [], history: [], champion: null, report: null, settings: { ...DEFAULT_SETTINGS },
   }
   g.teams = SCHOOLS.map(([school, mascot, abbr, color, p], i) => ({
     id: i, school, mascot, abbr, color, conf: Math.floor(i / 8), prestige: p + Math.round(rnd() * 10) / 10,
@@ -759,7 +768,11 @@ export interface Drive {
   start: number; end: number; plays: number; result: DriveEnd
 }
 type Boost = { off: number; def: number }
-interface Side { team: Team; blend: number; boost: Boost; plan: Plan }
+/** How a side subs: never, once leading by `at`, or for the whole 2nd half. */
+type Sub = { mode: Rotation; at: number }
+interface Side { team: Team; sub: Sub; boost: Boost; plan: Plan }
+/** Whether a side's backups are on the field for a drive in quarter q, given its lead. */
+const benchIn = (s: Sub, q: number, lead: number) => s.mode === 'half' ? q >= 3 : s.mode === 'rotate' ? lead >= s.at : false
 const DRIVES = 22
 /** Late in a game, a team trailing by this much scores more easily against a prevent defense. */
 const GARBAGE_LEAD = 21
@@ -780,10 +793,10 @@ const SPOTLIGHT_CROWD = 0.01
 export const homeEdgeRating = (g: State, homeId: number, spotlight = false) => homeEdge(g, homeId, spotlight) * 65 * (1 + AWAY_SHARE) / 2
 /** Conference title games, bowls, playoff semifinals and the title game are at neutral sites. Quarterfinals are at the higher seed. */
 export const isNeutral = (x: Game) => x.type === 'ccg' || x.type === 'semi' || x.type === 'final' || x.type === 'bowl'
-/** A player for a play, from starters, or backups in the 2nd half when the coach rotates. */
-function onField(dd: ReturnType<typeof depth>, pos: Pos, q: number, blend: number) {
+/** A player for a play, from the backups when the bench is in, otherwise the starters. */
+function onField(dd: ReturnType<typeof depth>, pos: Pos, bench: boolean) {
   const d = dd[pos]
-  const pool = (blend >= 0.5 && q >= 3) || (blend > 0 && rnd() < blend) ? (d.backups.length ? d.backups : d.starters) : d.starters
+  const pool = bench && d.backups.length ? d.backups : d.starters
   return pool.length ? pick(pool) : null
 }
 const nm = (p: Player | null) => p ? p.last : 'a walk-on'
@@ -791,15 +804,24 @@ const st = (p: Player | null) => p ? (p.stats ??= { g: 0, passYds: 0, passTd: 0,
 function playGame(A: Side, B: Side, homeAdv: number, wantLog: boolean, weather: Weather = 'clear') {
   const fx = WEATHER_FX[weather]
   const wx = (s: Side) => -fx.pass * (1 - s.plan.off)
-  const ra = teamRatings(A.team, A.blend), rb = teamRatings(B.team, B.blend)
-  const sa = styleRatings(A.team, A.blend), sb = styleRatings(B.team, B.blend)
-  const ea = planEdge(sa, A.plan.off, sb, B.plan.def), eb = planEdge(sb, B.plan.off, sa, A.plan.def)
-  const offA = ra.off + A.boost.off + ea.off + wx(A), defB = rb.def + B.boost.def + ea.def
-  const offB = rb.off + B.boost.off + eb.off + wx(B), defA = ra.def + A.boost.def + eb.def
-  const sides = [
-    { s: A, p: clamp(0.36 + (offA - defB) / 65 + homeAdv + fx.drive, 0.1, 0.72), td: clamp(0.6 + (offA - defB) / 150, 0.35, 0.85), k: ra.k, def: B },
-    { s: B, p: clamp(0.36 + (offB - defA) / 65 - homeAdv * AWAY_SHARE + fx.drive, 0.1, 0.72), td: clamp(0.6 + (offB - defA) / 150, 0.35, 0.85), k: rb.k, def: A },
-  ]
+  // Ratings with starters (0) and with the bench in (1). Each drive uses whichever unit each side has out there.
+  const rt = [A, B].map(s => [teamRatings(s.team, 0), teamRatings(s.team, 1)])
+  const sty = [A, B].map(s => [styleRatings(s.team, 0), styleRatings(s.team, 1)])
+  const ra = rt[0][0], rb = rt[1][0]
+  const both = [A, B]
+  const odds = new Map<string, { p: number; td: number; k: number }>()
+  /** Drive odds for side o on offense, with each side's starters or bench. */
+  const driveOdds = (o: 0 | 1, ob: boolean, db: boolean) => {
+    const key = `${o}${+ob}${+db}`
+    const hit = odds.get(key); if (hit) return hit
+    const off = both[o], def = both[1 - o], oi = +ob, di = +db
+    const e = planEdge(sty[o][oi], off.plan.off, sty[1 - o][di], def.plan.def)
+    const gap = (rt[o][oi].off + off.boost.off + e.off + wx(off)) - (rt[1 - o][di].def + def.boost.def + e.def)
+    const home = o === 0 ? homeAdv : -homeAdv * AWAY_SHARE
+    const v = { p: clamp(0.36 + gap / 65 + home + fx.drive, 0.1, 0.72), td: clamp(0.6 + gap / 150, 0.35, 0.85), k: rt[o][oi].k }
+    odds.set(key, v); return v
+  }
+  const benchDrives = [0, 0]
   const score: [number, number] = [0, 0]
   const log: Drive[] = []
   const credit = new Map<Player, { td: number; pass: number; turn: number; sack: number; fg: number }>()
@@ -811,7 +833,12 @@ function playGame(A: Side, B: Side, homeAdv: number, wantLog: boolean, weather: 
   const dd = [depth(A.team), depth(B.team)]
   for (const d of dd) for (const pos of POSITIONS) for (const pl of d[pos].starters) st(pl)!.g++
   for (let i = 0; i < DRIVES; i++) {
-    const side = (i % 2) as 0 | 1, x = sides[side], q = Math.min(4, Math.floor(i / 5.5) + 1)
+    const side = (i % 2) as 0 | 1, q = Math.min(4, Math.floor(i / 5.5) + 1)
+    // Who has their bench in this drive, from the score going into it.
+    const bl = benchIn(both[side].sub, q, score[side] - score[1 - side]), dbl = benchIn(both[1 - side].sub, q, score[1 - side] - score[side])
+    if (bl) benchDrives[side]++
+    if (dbl) benchDrives[1 - side]++
+    const x = { ...driveOdds(side, bl, dbl), s: both[side] }
     let pts = 0, kind: 'td' | 'fg' | 'miss' | 'stop' = 'stop'
     // Garbage time: a team down three scores late faces a soft prevent defense.
     const garbage = q >= 4 && score[1 - side] - score[side] >= GARBAGE_LEAD ? GARBAGE_BOOST : 0
@@ -820,14 +847,14 @@ function playGame(A: Side, B: Side, homeAdv: number, wantLog: boolean, weather: 
     }
     score[side] += pts
     // Who touched the ball, and the yards. Every game keeps stats; only your games keep the text log.
-    const od = dd[side], ddf = dd[1 - side], bl = x.s.blend, dbl = x.def.blend
+    const od = dd[side], ddf = dd[1 - side]
     const rs = x.s.plan.off
     const run = rnd() < rs
-    const qb = onField(od, 'QB', q, bl)
+    const qb = onField(od, 'QB', bl)
     // Carries: mostly the lead back, with QB keepers and the odd sweep to a receiver.
     const rr = rnd()
-    const rusher = rr < 0.15 ? qb : rr < 0.25 ? onField(od, 'WR', q, bl) : onField(od, 'RB', q, bl)
-    const rec = onField(od, rnd() < 0.7 ? 'WR' : 'TE', q, bl)
+    const rusher = rr < 0.15 ? qb : rr < 0.25 ? onField(od, 'WR', bl) : onField(od, 'RB', bl)
+    const rec = onField(od, rnd() < 0.7 ? 'WR' : 'TE', bl)
     const yards = kind === 'td' ? ri(45, 85) : kind === 'fg' ? ri(30, 60) : kind === 'miss' ? ri(25, 55) : ri(0, 40)
     // Where the drive started and stopped, for the gamecast. Kicks happen from where the drive stalled.
     let start = kind === 'td' ? 100 - yards : ri(15, 35)
@@ -845,17 +872,17 @@ function playGame(A: Side, B: Side, homeAdv: number, wantLog: boolean, weather: 
       if (run) { text = `${Math.min(gained, ri(1, 45))}-yd TD run by ${nm(rusher)}`; give(rusher, 'td'); st(rusher) && st(rusher)!.rushTd++ }
       else { text = `${nm(qb)} ${Math.min(gained, ri(4, 75))}-yd TD pass to ${nm(rec)}`; give(qb, 'pass'); give(rec, 'td'); st(qb) && st(qb)!.passTd++; st(rec) && st(rec)!.recTd++ }
     } else if (kind === 'fg') {
-      const k = onField(od, 'K', q, bl); text = `${nm(k)} ${117 - end}-yd field goal`; give(k, 'fg'); st(k) && st(k)!.fg++
+      const k = onField(od, 'K', bl); text = `${nm(k)} ${117 - end}-yd field goal`; give(k, 'fg'); st(k) && st(k)!.fg++
     } else if (kind === 'miss') {
-      text = `${nm(onField(od, 'K', q, bl))} missed a ${117 - end}-yd field goal`
+      text = `${nm(onField(od, 'K', bl))} missed a ${117 - end}-yd field goal`
     } else {
       const r = rnd()
       if (r < 0.2) {
         result = 'turnover'
-        if (!run) { const db = onField(ddf, 'DB', q, dbl); text = `${nm(qb)} intercepted by ${nm(db)}`; give(db, 'turn'); st(db) && st(db)!.tkw++; st(qb) && st(qb)!.int++ }
-        else { const lb = onField(ddf, rnd() < 0.6 ? 'LB' : 'DL', q, dbl); text = `${nm(rusher)} fumbled, recovered by ${nm(lb)}`; give(lb, 'turn'); st(lb) && st(lb)!.tkw++ }
+        if (!run) { const db = onField(ddf, 'DB', dbl); text = `${nm(qb)} intercepted by ${nm(db)}`; give(db, 'turn'); st(db) && st(db)!.tkw++; st(qb) && st(qb)!.int++ }
+        else { const lb = onField(ddf, rnd() < 0.6 ? 'LB' : 'DL', dbl); text = `${nm(rusher)} fumbled, recovered by ${nm(lb)}`; give(lb, 'turn'); st(lb) && st(lb)!.tkw++ }
       } else if (r < 0.42) {
-        const dl = onField(ddf, rnd() < 0.7 ? 'DL' : 'LB', q, dbl); text = `Sacked by ${nm(dl)} on third down. Punt`; give(dl, 'sack'); st(dl) && st(dl)!.sacks++
+        const dl = onField(ddf, rnd() < 0.7 ? 'DL' : 'LB', dbl); text = `Sacked by ${nm(dl)} on third down. Punt`; give(dl, 'sack'); st(dl) && st(dl)!.sacks++
       } else {
         // Most stalled drives punt; going for it and failing is rarer (about 1 in 20 drives).
         text = gained < 10 ? 'Three and out. Punt' : rnd() < 0.2 && end >= 40 ? 'Turned over on downs' : end >= 45 && end <= 60 ? 'Stalled near midfield. Punt' : 'Drive stalls. Punt'
@@ -869,7 +896,7 @@ function playGame(A: Side, B: Side, homeAdv: number, wantLog: boolean, weather: 
     const side = rnd() < 0.5 + edge / 60 ? 0 : 1, pts = pick([3, 7])
     score[side] += pts
     const od = dd[side]
-    const who = pts === 7 ? onField(od, rnd() < 0.5 ? 'RB' : 'WR', 4, 0) : onField(od, 'K', 4, 0)
+    const who = pts === 7 ? onField(od, rnd() < 0.5 ? 'RB' : 'WR', false) : onField(od, 'K', false)
     if (pts === 7) { st(who) && (who!.pos === 'RB' ? st(who)!.rushTd++ : st(who)!.recTd++) } else st(who) && st(who)!.fg++
     if (wantLog) {
       const end = pts === 7 ? 100 : ri(80, 92)
@@ -877,7 +904,10 @@ function playGame(A: Side, B: Side, homeAdv: number, wantLog: boolean, weather: 
         start: 75, end, plays: ri(3, 7), result: pts === 7 ? 'td' : 'fg' })
     }
   }
-  return { hs: score[0], as: score[1], log, credit }
+  // Backups who got in get a game played on their stat line.
+  const share = benchDrives.map(n => n / DRIVES)
+  dd.forEach((d, i) => { if (share[i] > 0) for (const pos of POSITIONS) for (const pl of d[pos].backups.slice(0, STARTERS[pos])) st(pl)!.g++ })
+  return { hs: score[0], as: score[1], log, credit, share }
 }
 /** Best player of a side by touchdowns, turnovers forced, sacks and kicks. */
 function playerOfGame(team: Team, credit: ReturnType<typeof playGame>['credit']) {
@@ -893,7 +923,8 @@ function playerOfGame(team: Team, credit: ReturnType<typeof playGame>['credit'])
   }
   return best ? `${best.pos} ${best.first} ${best.last}: ${line}` : undefined
 }
-const BLEND_GROWTH = [0, 0.25, 0.6]
+/** Growth for a backup who plays the whole game. Half a game (the 2nd half) gives 0.6. */
+const BENCH_GROWTH = 1.2
 /** In-season growth for a starter per full game. Less than rotated backups get, so rotating still builds the bench. */
 const STARTER_GROWTH = 0.12
 function applySnaps(team: Team, blend: number, isUser: boolean, focus: number[], injMult = 1, devMult: (p: Player) => number = () => 1, heal = 0, focusSkill: Record<number, number> = {}): string[] {
@@ -910,7 +941,7 @@ function applySnaps(team: Team, blend: number, isUser: boolean, focus: number[],
     for (const p of bu) {
       const snaps = Math.round(60 * blend)
       played.push([p, snaps])
-      if (snaps > 0) grow(p, (blend >= 0.5 ? BLEND_GROWTH[2] : BLEND_GROWTH[1]) * devMult(p))
+      if (snaps > 0) grow(p, BENCH_GROWTH * blend * devMult(p))
     }
   }
   if (isUser) for (const id of focus) { const p = team.roster.find(x => x.id === id); if (p) grow(p, 0.35 * (p.trait === 'Gym rat' ? 2 : 1) * devMult(p), focusSkill[id] ?? 0) }
@@ -954,10 +985,11 @@ export function simWeek(g: State) {
     const h = team(g, gm.home), a = team(g, gm.away)
     const userHome = gm.home === g.user, userAway = gm.away === g.user
     const isUser = userHome || userAway
-    const cupcakeAI = gm.type === 'cupcake' ? 0.5 : 0
-    const hb = userHome ? g.rotation : cupcakeAI
-    const ab = userAway ? g.rotation : gm.type === 'cupcake' ? 0 : 0
-    if (isUser) gm.rotation = g.rotation
+    // AI coaches run their bench in the 2nd half against a cupcake.
+    const mySub: Sub = { mode: g.rotation, at: rotateAtOf(g) }
+    const hSub: Sub = userHome ? mySub : { mode: gm.type === 'cupcake' ? 'half' : 'starters', at: 0 }
+    const aSub: Sub = userAway ? mySub : { mode: 'starters', at: 0 }
+    if (isUser) { gm.sub = mySub.mode; if (mySub.mode === 'rotate') gm.subAt = mySub.at }
     const neutral = isNeutral(gm)
     const big = isPostseason(gm.type)
     const homeAdv = neutral ? 0 : homeEdge(g, h.id, !!gm.spotlight)
@@ -970,9 +1002,12 @@ export function simWeek(g: State) {
       const dog = teamRatings(h).ovr < teamRatings(a).ovr ? hBoost : aBoost
       dog.off += RIVAL_UNDERDOG; dog.def += RIVAL_UNDERDOG
     }
-    const res = playGame({ team: h, blend: hb, boost: hBoost, plan: hp }, { team: a, blend: ab, boost: aBoost, plan: ap }, homeAdv, isUser, weather)
+    const res = playGame({ team: h, sub: hSub, boost: hBoost, plan: hp }, { team: a, sub: aSub, boost: aBoost, plan: ap }, homeAdv, isUser, weather)
     const hs = res.hs, as = res.as
     gm.hs = hs; gm.as = as; gm.played = true
+    // Share of drives each side's bench played, which sets snaps and growth.
+    const [hb, ab] = res.share
+    if (isUser) gm.rotation = userHome ? hb : ab
     if (isUser) {
       gm.log = res.log; gm.plan = { ...myPlan }; gm.oppPlan = userHome ? ap : hp
       gm.potg = playerOfGame(userHome ? h : a, res.credit)
@@ -1062,7 +1097,7 @@ export function simWeek(g: State) {
   goals.forEach((x, i) => { if (locks(x) && !goalsBefore[i] && goalProgress(g, x).done) log(g, 'goal', `AD goal met: ${x.text}.`) })
   g.week++
   g.points = weeklyPoints(g)
-  g.rotation = 0
+  g.rotation = 'starters'
   // season over?
   if (g.week > FINAL_WEEK) g.phase = 'offseason'
   else scheduleNextRound(g)
@@ -1772,7 +1807,7 @@ export function advanceOffseason(g: State) {
   }
   // reset season
   for (const t of g.teams) { t.w = t.l = t.cw = t.cl = 0; t.confChamp = t.playoff = t.champ = t.helmet = false; t.bowl = undefined }
-  g.year++; g.week = 1; g.phase = 'season'; g.champion = null; g.focus = []; g.focusSkill = {}; g.rotation = 0
+  g.year++; g.week = 1; g.phase = 'season'; g.champion = null; g.focus = []; g.focusSkill = {}; g.rotation = 'starters'
   g.schedule = makeSchedule(g)
   g.recruits = makeRecruits(g)
   const staffNews = settleStaff(g)
@@ -2113,7 +2148,7 @@ export function takeJob(g: State, id: number) {
   if (!g.fired?.offers.includes(id)) return
   const old = g.teams[g.user]
   g.user = id
-  g.fired = null; g.focus = []; g.rotation = 0; g.portal = null
+  g.fired = null; g.focus = []; g.rotation = 'starters'; g.portal = null
   setSeed(g.seed)
   g.staff = ROLE_LIST.map(r => makeCoach(g, r, 1))
   g.staffMarket = makeMarket(g)

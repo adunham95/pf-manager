@@ -122,6 +122,9 @@ main { max-width: 1240px; margin: 0 auto; padding: 16px max(3vw, 12px) 48px; }
 .problabels span:first-child { color: var(--blue); }
 .seg { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); background: var(--soft); border: 1px solid var(--line); border-radius: 10px; padding: 3px; }
 .seg button { border: 0; background: none; border-radius: 8px; padding: 10px 4px; font-weight: 600; font-size: 14px; color: var(--muted); min-height: 44px; }
+.rotateat { display: flex; align-items: center; gap: 6px; margin-top: 8px; font-size: 14px; }
+.rotateat button { width: 36px; height: 36px; border: 1px solid var(--line); background: var(--soft); border-radius: 8px; font-weight: 700; font-size: 18px; color: var(--ink); }
+.rotateat input { width: 56px; height: 36px; text-align: center; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink); font-size: 15px; font-weight: 600; }
 .seg button.on { background: var(--card); color: var(--ink); box-shadow: 0 1px 3px rgba(0,0,0,.15); }
 .hint { background: light-dark(#fff1f3, #2a1520); color: light-dark(#a3102a, #ff9aac); border-radius: 10px; padding: 10px 12px; font-size: 14px; font-weight: 500; margin: 10px 0; }
 .hint.inset { margin: 10px 16px; }

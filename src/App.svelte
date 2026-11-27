@@ -139,7 +139,7 @@
   /** "#7 " for ranked teams, "" for unranked teams and cupcakes. */
   const rk = (id: number) => { const n = rankOf.get(id); return n && n <= G.TOP_N ? `#${n} ` : '' }
   const d = $derived(me ? G.depth(me) : null)
-  const myR = $derived(me && g ? G.teamRatings(me, next ? g.rotation : 0) : null)
+  const myR = $derived(me && g ? G.teamRatings(me, next ? G.previewBlend(g.rotation) : 0) : null)
   const oppR = $derived(opp ? G.teamRatings(opp, 0) : null)
   const bigGame = $derived(!!next && G.isPostseason(next.type))
   const boostOf = (t: G.Team) => { const b = G.gameDayBoost(g!, t, bigGame); return (b.off + b.def) / 2 }
@@ -411,11 +411,13 @@
   /** Jersey color for a recruit's face: yours once he commits, a plain high school grey before. */
   const recruitColor = (r: Recruit) => r.committed !== null && g ? G.team(g, r.committed).color : '#7c8799'
   const typeTag: Record<string, string> = { cupcake: 'Cupcake', nonconf: 'Non-conference', conf: 'Conference', ccg: 'Conference title', quarter: 'Playoff quarterfinal', semi: 'Playoff semifinal', final: 'National title', bowl: 'Bowl game' }
-  const ROT = [
-    { v: 0, name: 'Starters', note: 'Your best lineup plays the whole game.' },
-    { v: 0.25, name: 'Rotate', note: 'Backups take a quarter of the snaps and grow a little.' },
-    { v: 0.5, name: 'Backups 2nd half', note: 'Big growth for backups. Risky against a real team.' },
+  const ROT: { v: G.Rotation; name: string; note: () => string }[] = [
+    { v: 'starters', name: 'Starters', note: () => 'Your best lineup plays the whole game.' },
+    { v: 'rotate', name: 'Rotate', note: () => `Backups go in whenever you lead by ${G.rotateAtOf(g!)} or more, and starters come back if it gets close.` },
+    { v: 'half', name: 'Backups 2nd half', note: () => 'Backups play the whole 2nd half no matter the score. Big growth, risky against a real team.' },
   ]
+  /** Keep the Rotate lead a whole number from 1 to 60. */
+  function setRotateAt(n: number) { if (Number.isFinite(n)) g!.rotateAt = Math.min(60, Math.max(1, Math.round(n))) }
   function estRange(r: Recruit) {
     if (r.scouted) return `${r.ovr}`
     const lo = STAR_LO[r.stars]
@@ -930,7 +932,16 @@
               <div class="seg">
                 {#each ROT as r}<button class:on={g.rotation === r.v} onclick={() => (g!.rotation = r.v)}>{r.name}</button>{/each}
               </div>
-              <p class="muted small">{ROT.find(r => r.v === g!.rotation)?.note}</p>
+              {#if g.rotation === 'rotate'}
+                <div class="rotateat">
+                  <span>Sub in when up by</span>
+                  <button aria-label="Lower" onclick={() => setRotateAt(G.rotateAtOf(g!) - 1)}>−</button>
+                  <input type="number" min="1" max="60" value={G.rotateAtOf(g)} onchange={e => setRotateAt(+e.currentTarget.value)} aria-label="Points ahead to sub in the bench" />
+                  <button aria-label="Raise" onclick={() => setRotateAt(G.rotateAtOf(g!) + 1)}>+</button>
+                  <span>pts</span>
+                </div>
+              {/if}
+              <p class="muted small">{ROT.find(r => r.v === g!.rotation)?.note()}</p>
               <p class="sitenote {site}">
                 {#if site === 'home'}Home game. Your crowd lifts your offense and makes it harder on theirs.{#if g.facilities?.stadium} Your stadium upgrades make it louder.{/if}
                 {:else if site === 'away'}Road game. Their crowd is on their side, so expect a tougher day.
@@ -941,7 +952,7 @@
               {#if mySpot}<p class="spotnote">Win and you climb the poll, your recruits get excited and your fans go wild. Lose and everyone sees it.</p>
               {:else if spot}<p class="muted small">This week's Spotlight: <b>{rk(spot.away)}{G.team(g, spot.away).school}</b> at <b>{rk(spot.home)}{G.team(g, spot.home).school}</b>.</p>{/if}
               {#if next.type === 'cupcake'}<p class="hint">Cupcake week. Good time to get your bench real snaps.</p>{/if}
-              {#if g.rotation > 0 && noBackup.length}<p class="muted small">No backup at {noBackup.join(', ')}, so those starters stay in.</p>{/if}
+              {#if g.rotation !== 'starters' && noBackup.length}<p class="muted small">No backup at {noBackup.join(', ')}, so those starters stay in.</p>{/if}
               {#if scout}
                 <div class="gameplan">
                   <div class="gp-head"><h4>Game plan</h4></div>
@@ -1281,7 +1292,7 @@
           {#snippet srowBody()}
             <span class="wk">Wk {gm.week}</span>
             {@render badge(o, 'sm')}
-            <div class="grow"><b>{siteOf(gm) === 'away' ? 'at' : 'vs'} <span class="rk">{rk(o.id)}</span>{o.school}</b><div class="muted small"><span class="sitetag sm" class:home={siteOf(gm) === 'home'}>{SITE_LABEL[siteOf(gm)]}</span> {#if gm.played || gm.week === g!.week}<span title={G.WEATHER_TEXT[G.weatherOf(g!, gm)].name}>{G.WEATHER_TEXT[G.weatherOf(g!, gm)].icon}</span>{' '}{/if}{#if gm.spotlight || sameGame(spot, gm)}<span class="spotchip sm">📺 Spotlight</span>{' '}{/if}{gameTag(gm)}{gm.played && gm.rotation ? (gm.rotation >= 0.5 ? ' · backups played 2nd half' : ' · rotated') : ''}</div></div>
+            <div class="grow"><b>{siteOf(gm) === 'away' ? 'at' : 'vs'} <span class="rk">{rk(o.id)}</span>{o.school}</b><div class="muted small"><span class="sitetag sm" class:home={siteOf(gm) === 'home'}>{SITE_LABEL[siteOf(gm)]}</span> {#if gm.played || gm.week === g!.week}<span title={G.WEATHER_TEXT[G.weatherOf(g!, gm)].name}>{G.WEATHER_TEXT[G.weatherOf(g!, gm)].icon}</span>{' '}{/if}{#if gm.spotlight || sameGame(spot, gm)}<span class="spotchip sm">📺 Spotlight</span>{' '}{/if}{gameTag(gm)}{gm.played && gm.rotation ? (gm.sub === 'half' ? ' · backups played 2nd half' : ` · bench in at +${gm.subAt ?? G.DEFAULT_ROTATE_AT}`) : ''}</div></div>
             {#if res}<span class="result" class:w={res.w}>{res.w ? 'W' : 'L'} {res.text}</span>{:else}<span class="muted small">Upcoming</span>{/if}
           {/snippet}
           {#if gm.log}
